@@ -101,6 +101,77 @@ echo ""
 echo "📦 Installing dependencies..."
 npm install
 
+# Install Chrome Headless Shell system dependencies
+echo ""
+echo "🔧 Installing Chrome Headless Shell system dependencies..."
+
+# Function to install Chrome dependencies
+install_chrome_dependencies() {
+    if command -v apt-get &> /dev/null; then
+        echo "📥 Installing Chrome dependencies via apt-get..."
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libdrm2 \
+            libxss1 \
+            libgconf-2-4 \
+            libxrandr2 \
+            libasound2 \
+            libpangocairo-1.0-0 \
+            libatk1.0-0 \
+            libcairo-gobject2 \
+            libgtk-3-0 \
+            libgdk-pixbuf2.0-0 \
+            libgbm1 \
+            libxshmfence1
+        echo "✅ Chrome dependencies installed successfully"
+    elif command -v yum &> /dev/null; then
+        echo "📥 Installing Chrome dependencies via yum..."
+        sudo yum install -y -q \
+            nss \
+            atk \
+            at-spi2-atk \
+            libdrm \
+            libxss \
+            GConf2 \
+            libXrandr \
+            alsa-lib \
+            pango \
+            cairo-gobject \
+            gtk3 \
+            gdk-pixbuf2 \
+            mesa-libgbm \
+            libxshmfence
+        echo "✅ Chrome dependencies installed successfully"
+    elif command -v dnf &> /dev/null; then
+        echo "📥 Installing Chrome dependencies via dnf..."
+        sudo dnf install -y -q \
+            nss \
+            atk \
+            at-spi2-atk \
+            libdrm \
+            libxss \
+            GConf2 \
+            libXrandr \
+            alsa-lib \
+            pango \
+            cairo-gobject \
+            gtk3 \
+            gdk-pixbuf2 \
+            mesa-libgbm \
+            libxshmfence
+        echo "✅ Chrome dependencies installed successfully"
+    else
+        echo "⚠️  Could not detect package manager. You may need to install Chrome dependencies manually:"
+        echo "   Ubuntu/Debian: sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libgconf-2-4 libxrandr2 libasound2 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0 libgbm1 libxshmfence1"
+        echo "   CentOS/RHEL: sudo yum install nss atk at-spi2-atk libdrm libxss GConf2 libXrandr alsa-lib pango cairo-gobject gtk3 gdk-pixbuf2 mesa-libgbm libxshmfence"
+    fi
+}
+
+# Install Chrome dependencies
+install_chrome_dependencies
+
 # Download and setup Chrome Headless Shell
 echo ""
 echo "🔍 Setting up Chrome Headless Shell..."
@@ -171,8 +242,10 @@ else
             echo "✅ Chrome Headless Shell is working correctly"
         else
             echo "⚠️  Chrome Headless Shell binary may have issues (version check failed)"
-            echo "   This might be due to missing system dependencies."
-            echo "   Try installing: sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libgconf-2-4 libxrandr2 libasound2 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0"
+            echo "   This might be due to missing system dependencies or an incompatible system."
+            echo "   If issues persist, you may need to install additional dependencies manually:"
+            echo "   Ubuntu/Debian: sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libgconf-2-4 libxrandr2 libasound2 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0 libgbm1 libxshmfence1"
+            echo "   CentOS/RHEL: sudo yum install nss atk at-spi2-atk libdrm libxss GConf2 libXrandr alsa-lib pango cairo-gobject gtk3 gdk-pixbuf2 mesa-libgbm libxshmfence"
         fi
     else
         echo "❌ Chrome Headless Shell extraction failed"
