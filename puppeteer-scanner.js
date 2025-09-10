@@ -1,8 +1,8 @@
-/*  puppeteer-scanner.js
+/*  webpage_test.js
  *  Usage examples
- *    node puppeteer-scanner.js --url=example.com
- *    node puppeteer-scanner.js --url=example.com --use-proxy=true --csv=batch_01.csv
- *    node puppeteer-scanner.js --url=example.com --use-proxy=true --tcp-fallback
+ *    node webpage_test.js --url=example.com
+ *    node webpage_test.js --url=example.com --use-proxy=true --csv=batch_01.csv
+ *    node webpage_test.js --url=example.com --use-proxy=true --tcp-fallback
  *
  *  Features:
  *    - Records detailed resource information (URL, domain, type, method)
@@ -125,6 +125,9 @@ let geoBlockedDomains = new Set(); // Track domains with geo-restrictions
 let highestPriorityStatus = null;
 const STATUS_PRIORITY = { 451: 4, 403: 3, 503: 2, 500: 1 };
 
+// Track the first main document status code (including redirects like 301)
+let firstMainDocumentStatus = null;
+
 // Track if final result came from TCP fallback
 let finalResultFromTCP = false;
 
@@ -137,6 +140,14 @@ function updatePriorityStatus(status) {
       highestPriorityStatus = status;
       networkLog(`🔥 Priority status updated: ${status} (priority: ${priority})`);
     }
+  }
+}
+
+// Helper function to track the first main document status code
+function trackFirstMainDocumentStatus(status, resourceType) {
+  if (resourceType === 'document' && firstMainDocumentStatus === null) {
+    firstMainDocumentStatus = status;
+    networkLog(`📄 First main document status: ${status}`);
   }
 }
 
@@ -1407,6 +1418,9 @@ function extractDomain(url) {
       const domain = extractDomain(url);
       const status = res.status();
       
+      // ═══ TRACK FIRST MAIN DOCUMENT STATUS ═══
+      trackFirstMainDocumentStatus(status, req.resourceType());
+      
       // ═══ PRIORITY STATUS CODE TRACKING ═══
       updatePriorityStatus(status);
       
@@ -1889,6 +1903,7 @@ function extractDomain(url) {
         domainToIP.clear();
         loadEventFired = false;
         loadEventTime = null;
+        // Don't reset highestPriorityStatus or firstMainDocumentStatus - preserve across retries
         
         return await attemptPageLoad(attempt + 1);
       } else {
@@ -1915,7 +1930,7 @@ function extractDomain(url) {
           domainToIP.clear();
           loadEventFired = false;
           loadEventTime = null;
-          // Preserve highestPriorityStatus across TCP fallback
+          // Preserve highestPriorityStatus and firstMainDocumentStatus across TCP fallback
           
           // Mark that final result will come from TCP
           finalResultFromTCP = true;
@@ -2579,12 +2594,12 @@ function extractDomain(url) {
         chromeErrorForCsv = err.message.split('\n')[0].replace(/[^A-Z0-9_]/g, '_').toUpperCase();
       }
       
-      // Status code logic: Use highest priority status if found, otherwise use "-" 
-      const statusForCsv = highestPriorityStatus || '-';
-      const ipForCsv = highestPriorityStatus ? 'BLOCKED' : 'ERROR';
+      // Status code logic: Use first main document status if available, then highest priority status, otherwise use "-"
+      const statusForCsv = firstMainDocumentStatus || highestPriorityStatus || '-';
+      const ipForCsv = (firstMainDocumentStatus || highestPriorityStatus) ? 'BLOCKED' : 'ERROR';
       const countryForCsv = 'Unknown';
       
-      log(`📊 Error case - Priority status: ${highestPriorityStatus || 'None'}, Chrome error: ${chromeErrorForCsv}`);
+      log(`📊 Error case - First main status: ${firstMainDocumentStatus || 'None'}, Priority status: ${highestPriorityStatus || 'None'}, Chrome error: ${chromeErrorForCsv}`);
       log(`📊 CSV format - Status: ${statusForCsv}, Chrome fail: ${chromeErrorForCsv}`);
       
       const tcpResult = finalResultFromTCP ? 'TCP' : 'QUIC';
