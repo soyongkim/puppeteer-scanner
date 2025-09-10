@@ -1,0 +1,32 @@
+{
+  "name": "puppeteer-scanner",
+  "version": "1.0.0",
+  "description": "A web scanner tool using Puppeteer to analyze webpage resources, domains, and network connections with optional proxy support",
+  "main": "puppeteer-scanner.js",
+  "type": "module",
+  "scripts": {
+    "start": "node puppeteer-scanner.js",
+    "install-deps": "npm install",
+    "test": "node puppeteer-scanner.js --url=google.com"
+  },
+  "keywords": [
+    "puppeteer",
+    "web-scanner",
+    "network-analysis",
+    "proxy",
+    "tcp-fallback"
+  ],
+  "author": "soyongkim",
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer-core": "^21.0.0",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/soyongkim/puppeteer-scanner.git"
+  }
+}
