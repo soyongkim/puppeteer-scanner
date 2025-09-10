@@ -24,6 +24,20 @@ install_nodejs_via_nvm() {
     nvm install --lts
     nvm use --lts
     
+    # Ensure nvm is available in new terminal sessions
+    if ! grep -q "NVM_DIR" ~/.bashrc; then
+        echo ""
+        echo "🔧 Adding nvm to ~/.bashrc for future terminal sessions..."
+        echo '' >> ~/.bashrc
+        echo '# Load nvm (Node Version Manager)' >> ~/.bashrc
+        echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.bashrc
+        echo "✅ nvm added to ~/.bashrc"
+    else
+        echo "✅ nvm already configured in ~/.bashrc"
+    fi
+    
     echo "✅ Node.js installed via nvm"
 }
 
