@@ -447,22 +447,22 @@ async function detectWebsiteLanguage(page) {
       },
       'Chinese': {
         unicode: /[\u4e00-\u9fff]/,
-        words: /[的了是在有我他这个们你来不到一上也为就学生会可以要对没说她好都和很给用过因请让从想实现理明白知道看见听到]/g,
+        words: /(的|了|是|在|有|我|他|这|个|们|你|来|不|到|一|上|也|为|就|学|生|会|可|以|要|对|没|说|她|好|都|和|很|给|用|过|因|请|让|从|想|实|现|理|明|白|知|道|看|见|听|到)/g,
         commonPhrases: /(因为|所以|但是|然后|如果|虽然|然而|或者|而且|不过)/g
       },
       'Japanese': {
         unicode: /[\u3040-\u30ff\u4e00-\u9faf]/,
-        words: /[のはにをがでてにはかもまたよりこそでもだけなどでしょうますですれるあるいるするなるできるみるくるいくものことひとなにみずあめつちひかりかぜそらうみやまはなとりむしさかなくさきのみもりかわいけたにまちみせいえがっこうびょういんこうえん]/g,
+        words: /(の|は|に|を|が|で|て|と|も|また|より|こそ|でも|だけ|など|でしょう|ます|です|れる|ある|いる|する|なる|できる|みる|くる|いく|もの|こと|ひと|なに|みず|あめ|つち|ひかり|かぜ|そら|うみ|やま|はな|とり|むし|さかな|くさ|き|のみ|もり|かわ|いけ|たに|まち|みせ|いえ|がっこう|びょういん|こうえん)/g,
         commonPhrases: /(ですから|それで|しかし|でも|もし|だから|けれども|または|そして|ところが)/g
       },
       'Korean': {
         unicode: /[\uac00-\ud7af]/,
-        words: /[이가를을에서와과도의는은로으로하고하다있다없다되다보다같다다른많다작다크다좋다나쁘다새로운오래된빠른느린높은낮은]/g,
+        words: /(이|가|를|을|에서|와|과|도|의|는|은|로|으로|하고|하다|있다|없다|되다|보다|같다|다른|많다|작다|크다|좋다|나쁘다|새로운|오래된|빠른|느린|높은|낮은)/g,
         commonPhrases: /(그래서|하지만|그러나|만약|왜냐하면|그러므로|또는|그리고|하지만)/g
       },
       'Arabic': {
         unicode: /[\u0600-\u06ff]/,
-        words: /[فيمنإلىعلىهذاهذهذلكتلككانكانتليسليستأنأنهأنهاالتيالذيالذينالاتيالواتيوالأوإنكلبعدقبلعندعندماحينحيثكيفلماذاماذامتى]/g,
+        words: /(في|من|إلى|على|هذا|هذه|ذلك|تلك|كان|كانت|ليس|ليست|أن|أنه|أنها|التي|الذي|الذين|اللاتي|اللواتي|وال|أو|إن|كل|بعد|قبل|عند|عندما|حين|حيث|كيف|لماذا|ماذا|متى)/g,
         commonPhrases: /(لأن|ولكن|ومع|إذا|عندما|بينما|حتى|أو|لكن)/g
       },
       'Dutch': {
@@ -474,6 +474,11 @@ async function detectWebsiteLanguage(page) {
         unicode: /[a-ząćęłńóśźż]/i,
         words: /\b(że|się|nie|na|do|jest|będzie|ma|ale|jak|tak|być|czy|lub|oraz|gdy|już|jeszcze|bardzo|może|można|przez|pod|nad|między|przed|po|za|bez|dla|od|przy|we|ze|ze|co|kto|gdzie|kiedy|dlaczego)\b/g,
         commonPhrases: /(ponieważ|dlatego|jednak|jeśli|chociaż|podczas|zanim|żeby)/g
+      },
+      'Persian': {
+        unicode: /[\u0600-\u06ff]/,
+        words: /(و|های|که|در|از|به|را|ام|ان|یا|دو|آن|یا|از|یا|بر|تا|ما|این|با|یا|ان|یا|های|با|یا|اگر|که|پس|حتی|ولی|تا|که|چون|چرا|نبود|بوده|است|آمده|ورده|بود)/g,
+        commonPhrases: /(چون|چرا|ولی|اگر|تا|پس|حتی|زیرا|بنابراین|البته|همچنین|یعنی)/g
       }
     };
     
@@ -526,10 +531,16 @@ async function detectWebsiteLanguage(page) {
           'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
           'it': 'Italian', 'pt': 'Portuguese', 'ru': 'Russian', 'zh': 'Chinese',
           'ja': 'Japanese', 'ko': 'Korean', 'ar': 'Arabic', 'nl': 'Dutch',
-          'pl': 'Polish'
+          'pl': 'Polish', 'et': 'Estonian', 'da': 'Danish', 'sv': 'Swedish',
+          'no': 'Norwegian', 'fi': 'Finnish', 'cs': 'Czech', 'sk': 'Slovak',
+          'hu': 'Hungarian', 'ro': 'Romanian', 'bg': 'Bulgarian', 'hr': 'Croatian',
+          'sl': 'Slovenian', 'lt': 'Lithuanian', 'lv': 'Latvian', 'el': 'Greek',
+          'tr': 'Turkish', 'he': 'Hebrew', 'th': 'Thai', 'vi': 'Vietnamese',
+          'hi': 'Hindi', 'bn': 'Bengali', 'ur': 'Urdu', 'fa': 'Persian',
+          'ms': 'Malay', 'id': 'Indonesian', 'tl': 'Filipino', 'sw': 'Swahili'
         };
         if (langMap[explicitLanguage] === language) {
-          score *= 1.5; // 50% boost for declared language
+          score *= 1.5; //
         }
       }
       
@@ -592,11 +603,43 @@ async function detectWebsiteLanguage(page) {
       .filter(([_, score]) => score.total >= 10)
       .slice(0, 3);
     
+    // Fallback: If content detection has very low confidence and HTML lang is declared,
+    // trust the HTML lang attribute instead of unreliable content detection
+    let finalPrimaryLanguage = topLanguage;
+    let finalConfidence = confidence;
+    let finalReason = reason;
+    
+    if ((confidence === 'Very Low' || confidence === 'Low') && topScore.total < 15 && explicitLanguage) {
+      const langMap = {
+        'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
+        'it': 'Italian', 'pt': 'Portuguese', 'ru': 'Russian', 'zh': 'Chinese',
+        'ja': 'Japanese', 'ko': 'Korean', 'ar': 'Arabic', 'nl': 'Dutch',
+        'pl': 'Polish', 'et': 'Estonian', 'da': 'Danish', 'sv': 'Swedish',
+        'no': 'Norwegian', 'fi': 'Finnish', 'cs': 'Czech', 'sk': 'Slovak',
+        'hu': 'Hungarian', 'ro': 'Romanian', 'bg': 'Bulgarian', 'hr': 'Croatian',
+        'sl': 'Slovenian', 'lt': 'Lithuanian', 'lv': 'Latvian', 'el': 'Greek',
+        'tr': 'Turkish', 'he': 'Hebrew', 'th': 'Thai', 'vi': 'Vietnamese',
+        'hi': 'Hindi', 'bn': 'Bengali', 'ur': 'Urdu', 'fa': 'Persian',
+        'ms': 'Malay', 'id': 'Indonesian', 'tl': 'Filipino', 'sw': 'Swahili'
+      };
+      
+      if (langMap[explicitLanguage]) {
+        finalPrimaryLanguage = langMap[explicitLanguage];
+        finalConfidence = 'Medium';
+        finalReason = `Fallback to HTML lang attribute (${explicitLanguage}) due to low content detection confidence`;
+      } else {
+        // Unknown language code - use the raw code
+        finalPrimaryLanguage = explicitLanguage.toUpperCase();
+        finalConfidence = 'Medium';
+        finalReason = `Using HTML lang attribute (${explicitLanguage}) - language code not recognized`;
+      }
+    }
+    
     return {
-      primaryLanguage: topLanguage,
-      confidence: confidence,
+      primaryLanguage: finalPrimaryLanguage,
+      confidence: finalConfidence,
       score: topScore.total,
-      reason: reason,
+      reason: finalReason,
       declaredLanguage: explicitLanguage || 'none',
       textLength: textLength,
       secondaryLanguages: significantLanguages.slice(1).map(([lang, score]) => ({
@@ -2384,9 +2427,11 @@ function extractDomain(url) {
         log(`Using Japanese content detection (--jp flag enabled)`);
         const japaneseResults = await detectJapaneseContent(page);
         
+        // Also run full language detection to get the actual primary language
+        const fullLanguageResults = await detectWebsiteLanguage(page);
+        
         // Determine if content is Japanese based on the simple detection
         const isJapanese = japaneseResults.hasJapaneseText || japaneseResults.isHtmlLangJapanese || japaneseResults.metaLangs.length > 0;
-        const declaredLanguage = japaneseResults.isHtmlLangJapanese ? 'ja' : (japaneseResults.metaLangs.length > 0 ? japaneseResults.metaLangs[0] : 'unknown');
         
         // Map Japanese detection results to standard language results format for CSV compatibility
         languageResults = {
@@ -2394,14 +2439,15 @@ function extractDomain(url) {
           confidence: isJapanese ? 'High' : 'High',
           score: isJapanese ? 1 : 0,
           reason: isJapanese ? 'Japanese characters or language declaration detected' : 'No Japanese content detected',
-          declaredLanguage: declaredLanguage,
-          textLength: 0
+          declaredLanguage: fullLanguageResults.primaryLanguage, // Use actual detected primary language
+          textLength: fullLanguageResults.textLength
         };
         
         log(`Japanese Text Found: ${japaneseResults.hasJapaneseText ? 'Yes' : 'No'}`);
         log(`HTML Lang Japanese: ${japaneseResults.isHtmlLangJapanese ? 'Yes' : 'No'}`);
         log(`Meta Languages: ${japaneseResults.metaLangs.length > 0 ? japaneseResults.metaLangs.join(', ') : 'None'}`);
         log(`Final Result: ${languageResults.primaryLanguage}`);
+        log(`Actual Primary Language: ${fullLanguageResults.primaryLanguage} (${fullLanguageResults.confidence} confidence)`);
         log(`Declared Language: ${languageResults.declaredLanguage}`);
         
       } else {
