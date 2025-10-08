@@ -39,11 +39,219 @@ function error(message) {
   console.error(`[${getTimestamp()}] ${message}`);
 }
 
+// Function to escape CSV fields that contain commas, quotes, or newlines
+function escapeCsvField(field) {
+  if (field && (field.includes(',') || field.includes('"') || field.includes('\n'))) {
+    return `"${field.replace(/"/g, '""')}"`;
+  }
+  return field || '';
+}
+
+// ── Request Filtering Configuration ─────────────────────────────────────────
+// Domains to ignore (ads, analytics, tracking)
+const BLOCKED_DOMAIN_KEYWORDS = [
+  // Google (Ads/Analytics)
+  'google-analytics.com',
+  'analytics.google.com',
+  'googletagmanager.com',
+  'googletagservices.com',
+  'doubleclick.net',
+  'googlesyndication.com',
+  'g.doubleclick.net',
+  'pagead2.googlesyndication.com',
+  'stats.g.doubleclick.net',
+
+  // Meta / Facebook
+  'connect.facebook.net',
+
+  // Microsoft / Bing
+  'bat.bing.com',
+
+  // TikTok
+  'analytics.tiktok.com',
+
+  // Twitter / X
+  'analytics.twitter.com',
+
+  // Amazon Advertising
+  'amazon-adsystem.com',      // Amazon Ads domain
+  'aax.amazon-adsystem.com',  // Amazon Advertising eXchange (DSP)
+  'mads.amazon-adsystem.com', // Amazon Mobile Ads
+  's.amazon-adsystem.com',    // Amazon Ads scripts & pixels
+
+
+  // Popular analytics / performance / APM
+  'cdn.segment.com',
+  'segment.io',
+  'bam.nr-data.net',
+  'js-agent.newrelic.com',
+  'static.cloudflareinsights.com',
+  'static.hotjar.com',
+  'script.hotjar.com',
+  'fullstory.com',
+  'logrocket.io',
+  'mixpanel.com',
+  'chartbeat.com',
+
+  // Ads / verification / viewability
+  'moatads.com',
+  'adsafeprotected.com',
+  'scorecardresearch.com',
+  'comscore.com',
+  'quantserve.com',
+  'quantcast.com',
+  'outbrain.com',
+  'taboola.com',
+
+  // Support / chat widgets
+  'intercom.io',
+  'intercomcdn.com',
+  'zendesk.com',
+  'tawk.to',
+
+  // Error tracking
+  'sentry.io',
+  'bugsnag.com',
+
+  // Extra
+  'cliengo.com',
+  'egoi.site',
+];
+
+// const BLOCKED_DOMAIN_KEYWORDS = [];
+
+
+// URL patterns to block (tracking scripts, analytics paths)
+// const BLOCKED_URL_PATTERNS = [
+//   // Google Analytics / GTM
+//   '/gtag/js',
+//   '/analytics.js',
+//   '/gtm.js',
+//   '/collect',      // GA(UA)
+//   '/g/collect',    // GA4
+//   '/r/collect',   
+
+//   // Google Ads / DoubleClick
+//   '/pagead/',
+//   '/adsid/',
+//   '/adx/',
+//   '/dc/prebid/',
+
+//   // Facebook (Pixel)
+//   '/fbevents.js',
+//   '/tr?',          // https://www.facebook.com/tr?
+//   '/tr/',
+
+//   // Bing
+//   '/bat.js',
+
+//   // TikTok
+//   '/i18n/pixel/',
+//   '/pixel/events',
+
+//   // Twitter / X
+//   '/i/adsct',
+
+//   // Amazon Ads
+//   '/x/px/',                   // Amazon Ads pixel endpoint
+//   '/e/cm',                    // Amazon conversion measurement
+//   '/aax2/apstag.js',          // Amazon Publisher Services (header bidding)
+
+//   // Hotjar
+//   '/hotjar-',
+//   '/hotjar.js',
+
+//   // Cloudflare Insights
+//   '/beacon.min.js',
+
+//   // Boomerang (Akamai)
+//   '/boomerang',
+//   '/boomerang.min.js',
+// ];
+
+const BLOCKED_URL_PATTERNS = [];
+
+
+
+
+
+// Resource types to ignore if they're not load-blocking
+//const NON_ESSENTIAL_RESOURCE_TYPES = ['xhr', 'fetch', 'ping', 'beacon'];
+const NON_ESSENTIAL_RESOURCE_TYPES = [];
+// ── Request Filtering Functions ─────────────────────────────────────────────
+function shouldBlockDomain(url) {
+  const urlLower = url.toLowerCase();
+  
+  // Extract domain from URL (simple version)
+  let domain;
+  try {
+    domain = new URL(url).hostname.toLowerCase();
+  } catch (e) {
+    domain = url.toLowerCase();
+  }
+  
+  // Check if domain or URL contains any blocked keywords
+  for (const keyword of BLOCKED_DOMAIN_KEYWORDS) {
+    const keywordLower = keyword.toLowerCase();
+    
+    // Check if keyword is in domain or URL
+    if (domain.includes(keywordLower) || urlLower.includes(keywordLower)) {
+      return true;
+    }
+  }
+  
+  // Check if URL contains any blocked patterns
+  for (const pattern of BLOCKED_URL_PATTERNS) {
+    const patternLower = pattern.toLowerCase();
+    
+    // Check if pattern is in URL
+    if (urlLower.includes(patternLower)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+function shouldBlockNonEssentialResource(resourceType, isLoadBlocking) {
+  // Only block non-essential resources if they're not load-blocking
+  return NON_ESSENTIAL_RESOURCE_TYPES.includes(resourceType.toLowerCase()) && !isLoadBlocking;
+}
+
+function shouldIgnoreRequest(url, resourceType, isLoadBlocking) {
+  let domain;
+  try {
+    domain = new URL(url).hostname;
+  } catch (e) {
+    domain = url;
+  }
+  
+  // Check if domain should be blocked
+  if (shouldBlockDomain(url)) {
+    return { 
+      shouldIgnore: true, 
+      reason: 'blocked_domain',
+      detail: `${resourceType.toUpperCase()} from tracking/ad domain: ${domain}`
+    };
+  }
+  
+  // Check if non-essential resource should be blocked
+  if (shouldBlockNonEssentialResource(resourceType, isLoadBlocking)) {
+    return { 
+      shouldIgnore: true, 
+      reason: 'non_essential_resource',
+      detail: `Non-load-blocking ${resourceType.toUpperCase()} from: ${domain}`
+    };
+  }
+  
+  return { shouldIgnore: false, reason: null, detail: null };
+}
+
 // ── Proxy Statistics Helper ─────────────────────────────────────────────────
 async function fetchProxyStats() {
   try {
-    networkLog('Fetching QUIC proxy statistics...');
-    const response = await fetch('http://localhost:9090/stats', {
+    networkLog(`Fetching QUIC proxy statistics from port ${reportPort}...`);
+    const response = await fetch(`http://localhost:${reportPort}/stats`, {
       timeout: 5000 // 5 second timeout
     });
     
@@ -66,10 +274,13 @@ async function fetchProxyStats() {
       total_data_amount: stats.total_data_amount || 0,
       total_previous_data_amount: stats.total_previous_data_amount || 0,
       total_migrated_data_amount: stats.total_migrated_data_amount || 0,
+      total_stateless_resets: stats.total_stateless_resets || 0,
+      total_migration_disabled: stats.total_migration_disabled || 0,
       migration_success_rate: stats.total_data_amount > 0 ? 
         ((stats.total_migrated_data_amount / stats.total_data_amount) * 100).toFixed(2) : 0,
       timestamp: stats.timestamp || Date.now(),
-      dns_fallback_occurred: stats.dns_fallback_occurred || false
+      dns_fallback_occurred: stats.dns_fallback_occurred || false,
+      connections_detail: stats.connections_detail || ''
     };
   } catch (err) {
     networkLog(`Failed to fetch proxy stats: ${err.message}`);
@@ -79,6 +290,8 @@ async function fetchProxyStats() {
       total_data_amount: 0,
       total_previous_data_amount: 0,
       total_migrated_data_amount: 0,
+      total_stateless_resets: 0,
+      total_migration_disabled: 0,
       migration_success_rate: 0,
       timestamp: Date.now(),
       dns_fallback_occurred: false,
@@ -100,11 +313,13 @@ const useProxy  = argMap['use-proxy'] === true || argMap['use-proxy'] === 'true'
 const csvFile   = argMap.csv || 'webpage_analysis_results.csv';
 const tcpFallback = argMap['tcp-fallback'] === true || argMap['tcp-fallback'] === 'true';
 const useJapaneseDetection = argMap.jp === true || argMap.jp === 'true';
-const proxyHost = 'http://localhost:4433';
+const proxyPort = argMap['proxy-port'] || '4433';
+const reportPort = argMap['report-port'] || '9090';
+const proxyHost = `http://localhost:${proxyPort}`;
 
 if (!targetUrl) {
   error('Missing required --url argument.');
-  error('Usage: node compare_enhanced.js --url=example.com [--use-proxy] [--tcp-fallback] [--jp] [--csv=file.csv]');
+  error('Usage: node compare_enhanced.js --url=example.com [--use-proxy] [--tcp-fallback] [--jp] [--csv=file.csv] [--proxy-port=PORT] [--report-port=PORT]');
   process.exit(1);
 }
 
@@ -131,6 +346,13 @@ let firstMainDocumentStatus = null;
 // Track if final result came from TCP fallback
 let finalResultFromTCP = false;
 
+// Filtering statistics
+let filteredRequestsStats = {
+  blocked_domain: 0,
+  non_essential_resource: 0,
+  total_filtered: 0
+};
+
 // Helper function to update highest priority status code
 function updatePriorityStatus(status) {
   const priority = STATUS_PRIORITY[status];
@@ -143,11 +365,40 @@ function updatePriorityStatus(status) {
   }
 }
 
-// Helper function to track the first main document status code
+// Helper function to track the final main document status code
+// Priority: 200 (success) > 4xx/5xx (errors) > 3xx (redirects)
 function trackFirstMainDocumentStatus(status, resourceType) {
-  if (resourceType === 'document' && firstMainDocumentStatus === null) {
-    firstMainDocumentStatus = status;
-    networkLog(`📄 First main document status: ${status}`);
+  if (resourceType === 'document') {
+    // If we don't have any status yet, record this one
+    if (firstMainDocumentStatus === null) {
+      firstMainDocumentStatus = status;
+      networkLog(`📄 First main document status: ${status}`);
+    }
+    // If we already have a status, update it based on priority
+    else {
+      const currentStatus = firstMainDocumentStatus;
+      let shouldUpdate = false;
+      
+      // Priority 1: Always prefer 200 (success) over anything else
+      if (status === 200) {
+        shouldUpdate = true;
+        networkLog(`📄 Updating to final successful status: ${status} (was: ${currentStatus})`);
+      }
+      // Priority 2: Prefer 4xx/5xx errors over 3xx redirects (but not over 200)
+      else if (status >= 400 && currentStatus >= 300 && currentStatus < 400) {
+        shouldUpdate = true;
+        networkLog(`📄 Updating to error status: ${status} (was redirect: ${currentStatus})`);
+      }
+      // Priority 3: Only update redirects if we don't have anything better
+      else if (status >= 300 && status < 400 && currentStatus >= 300 && currentStatus < 400) {
+        // Keep the first redirect, don't update
+        shouldUpdate = false;
+      }
+      
+      if (shouldUpdate) {
+        firstMainDocumentStatus = status;
+      }
+    }
   }
 }
 
@@ -176,6 +427,146 @@ function initializeDomainStats(domain) {
     });
   }
   return domainStats.get(domain);
+}
+
+// ── Helper: Parse proxy connections detail ─────────────────────────────────
+function parseConnectionsDetail(connectionsDetail) {
+  if (!connectionsDetail) return [];
+  
+  const connections = [];
+  const matches = connectionsDetail.match(/\{([^}]+)\}/g) || [];
+  
+  matches.forEach(match => {
+    try {
+      const content = match.slice(1, -1); // Remove { }
+      const parts = content.split(';').map(p => p.trim());
+      
+      if (parts.length < 2) return; // Skip malformed entries
+      
+      // Parse domain:ip:port from first part
+      const domainParts = parts[0].split(':');
+      if (domainParts.length < 3) return;
+      
+      const connection = {
+        domain: domainParts[0],
+        ip: domainParts[1],
+        port: domainParts[2],
+        statusInfo: {},
+        migrationDisabled: false,
+        statelessReset: false,
+        newConnectionIdReceived: false,
+        pathValidationState: 'unknown',
+        totalData: 0,
+        previousPath: 0,
+        migratedPath: 0,
+        connectionFailed: false,
+        failureReason: null
+      };
+      
+      // Parse each part
+      parts.forEach(part => {
+        if (part.startsWith('status:')) {
+          // Parse status codes (e.g., "status:200:13 204:1" or "status:Connection Close: 296" or "status:handshake fail")
+          const statusPart = part.substring(7); // Remove 'status:'
+          
+          // Check for handshake failures or other connection failures
+          if (statusPart.includes('handshake fail')) {
+            connection.connectionFailed = true;
+            connection.failureReason = 'handshake fail';
+            connection.statusInfo['handshake fail'] = '1';
+          } else if (statusPart.includes('Connection Close')) {
+            connection.statusInfo['Connection Close'] = statusPart.split(': ')[1] || '1';
+            connection.connectionFailed = true;
+            connection.failureReason = 'Connection Close';
+          } else if (statusPart.includes('timeout')) {
+            connection.connectionFailed = true;
+            connection.failureReason = 'timeout';
+            connection.statusInfo['timeout'] = '1';
+          } else if (statusPart.includes('refused')) {
+            connection.connectionFailed = true;
+            connection.failureReason = 'connection refused';
+            connection.statusInfo['connection refused'] = '1';
+          } else if (statusPart.includes('unreachable')) {
+            connection.connectionFailed = true;
+            connection.failureReason = 'network unreachable';
+            connection.statusInfo['network unreachable'] = '1';
+          } else {
+            const statusMatches = statusPart.match(/(\d+):(\d+)/g) || [];
+            statusMatches.forEach(sm => {
+              const [code, count] = sm.split(':');
+              connection.statusInfo[code] = parseInt(count);
+            });
+          }
+        } else if (part.includes('disable_connection_migration:')) {
+          connection.migrationDisabled = part.includes('true');
+        } else if (part.includes('stateless_reset:')) {
+          connection.statelessReset = part.includes('true');
+        } else if (part.startsWith('total_data:')) {
+          connection.totalData = parseInt(part.split(':')[1]) || 0;
+        } else if (part.startsWith('previous_path:')) {
+          connection.previousPath = parseInt(part.split(':')[1]) || 0;
+        } else if (part.startsWith('migrated_path:')) {
+          connection.migratedPath = parseInt(part.split(':')[1]) || 0;
+        } else if (part.includes('new_connection_id_received:')) {
+          connection.newConnectionIdReceived = part.includes('true');
+        } else if (part.startsWith('path_validation_state:')) {
+          connection.pathValidationState = part.split(':')[1] || 'unknown';
+        }
+      });
+      
+      connections.push(connection);
+    } catch (err) {
+      networkLog(`[WARNING] Failed to parse connection detail: ${match} - ${err.message}`);
+    }
+  });
+  
+  return connections;
+}
+
+// ── Helper: Extract real IP from proxy connections ──────────────────────────
+function extractRealIPFromProxy(targetDomain, proxyStats) {
+  if (!proxyStats || !proxyStats.connections_detail) {
+    return null;
+  }
+  
+  const connections = parseConnectionsDetail(proxyStats.connections_detail);
+  
+  // Find connection for target domain (try exact match first, then with/without www)
+  let targetConnection = connections.find(conn => conn.domain === targetDomain);
+  
+  if (!targetConnection) {
+    // Try with www prefix
+    targetConnection = connections.find(conn => conn.domain === `www.${targetDomain}`);
+  }
+  
+  if (!targetConnection) {
+    // Try without www prefix
+    const withoutWww = targetDomain.replace(/^www\./, '');
+    targetConnection = connections.find(conn => conn.domain === withoutWww);
+  }
+  
+  if (targetConnection) {
+    networkLog(`🔍 [REAL-IP] Found connection for ${targetDomain}: ${targetConnection.ip} (from ${targetConnection.domain})`);
+    return {
+      ip: targetConnection.ip,
+      domain: targetConnection.domain,
+      statusInfo: targetConnection.statusInfo,
+      totalData: targetConnection.totalData,
+      migrationDisabled: targetConnection.migrationDisabled,
+      newConnectionIdReceived: targetConnection.newConnectionIdReceived,
+      pathValidationState: targetConnection.pathValidationState
+    };
+  }
+  
+  // If no direct match, show all available connections for debugging
+  if (connections.length > 0) {
+    networkLog(`🔍 [REAL-IP] No direct match for ${targetDomain}. Available connections:`);
+    connections.forEach(conn => {
+      networkLog(`   - ${conn.domain} -> ${conn.ip}`);
+    });
+  }
+  
+  return null;
 }
 
 // ── Helper: Extract IP from Chromium's response ─────────────────────────────
@@ -395,18 +786,220 @@ async function detectJapaneseContent(page) {
 
 // ── Helper: Comprehensive Language Detector ─────────────────────────────────
 async function detectWebsiteLanguage(page) {
+  // Wait for the page to be fully loaded using Puppeteer methods
+  try {
+    await page.waitForSelector('body', { timeout: 5000 });
+    await page.waitForFunction(() => document.readyState === 'complete', { timeout: 5000 });
+    
+    // Wait for initial network activity to settle
+    await page.waitForTimeout(2000);
+    
+    // Multiple waiting strategies for JavaScript-heavy sites
+    try {
+      // Wait for basic DOM structure
+      await page.waitForFunction(() => {
+        const elements = document.querySelectorAll('*');
+        return document.readyState === 'complete' && elements.length > 10;
+      }, { timeout: 10000 });
+      
+      // Wait for network idle
+      await page.waitForLoadState?.('networkidle') || page.waitForTimeout(2000);
+      
+      // Wait for substantial content OR declare language elements
+      await page.waitForFunction(() => {
+        const bodyText = document.body?.innerText || document.body?.textContent || '';
+        const documentText = document.documentElement?.innerText || document.documentElement?.textContent || '';
+        const visibleElements = document.querySelectorAll('p, div, span, article, section, h1, h2, h3, h4, h5, h6, a, li, td, th');
+        const visibleText = Array.from(visibleElements)
+          .map(el => el.innerText || el.textContent || '')
+          .join(' ').trim();
+        
+        // Check for language declaration
+        const htmlLang = document.documentElement.lang || document.querySelector('html')?.lang || '';
+        const hasLangDeclaration = htmlLang.length > 0;
+        
+        const hasSubstantialContent = bodyText.length > 300 || documentText.length > 300 || visibleText.length > 300;
+        const hasElements = visibleElements.length > 15;
+        const isComplete = document.readyState === 'complete';
+        
+        // Accept if we have language declaration even without much content
+        return isComplete && (hasSubstantialContent || hasElements || hasLangDeclaration);
+      }, { timeout: 15000 });
+      
+    } catch (waitError) {
+      console.log('Enhanced waiting failed, trying basic approach:', waitError.message);
+      
+      // Fallback: just wait for page completion and some basic elements
+      await page.waitForFunction(() => {
+        return document.readyState === 'complete' && document.querySelectorAll('*').length > 5;
+      }, { timeout: 5000 });
+    }
+    
+    // Final wait for any last JavaScript execution
+    await page.waitForTimeout(4000);
+    
+  } catch (e) {
+    console.log('Warning: Page may not be fully loaded, continuing with language detection...');
+  }
+  
   return await page.evaluate(() => {
-    // Get page text content
-    const bodyText = document.body?.innerText || '';
+    // Try multiple extraction methods for JavaScript-rendered content
+    const bodyInnerText = document.body?.innerText || '';
+    const bodyTextContent = document.body?.textContent || '';
     const title = document.title || '';
     const metaDescription = document.querySelector('meta[name="description"]')?.content || '';
-    const fullText = `${title} ${metaDescription} ${bodyText}`.toLowerCase();
     
-    // Get explicit language declarations
-    const htmlLang = (document.documentElement.lang || '').toLowerCase();
+    // Additional content extraction attempts - more aggressive for JavaScript sites
+    const allElements = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, div, span, a, td, th, li, article, section, main, nav, header, footer, button, label, input, textarea'));
+    const visibleText = allElements
+      .map(el => {
+        // Skip hidden elements but be more lenient
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') {
+          return '';
+        }
+        // For JavaScript-heavy sites, try multiple text extraction methods
+        const text = el.innerText || el.textContent || el.getAttribute('alt') || el.getAttribute('title') || '';
+        return text.trim();
+      })
+      .filter(text => text.length > 1) // More lenient filter
+      .join(' ');
+    
+    // Try document-level text extraction as fallback
+    const documentText = document.documentElement?.innerText || document.documentElement?.textContent || '';
+    
+    // Even more aggressive: try to get text from common content containers
+    const containerSelectors = [
+      'main', '.main', '#main', '.content', '#content', '.container', 
+      '.page-content', '.entry-content', '.post-content', '.article-content',
+      '[role="main"]', '.site-content', '#primary', '.primary-content'
+    ];
+    
+    let containerText = '';
+    for (const selector of containerSelectors) {
+      const container = document.querySelector(selector);
+      if (container) {
+        const text = container.innerText || container.textContent || '';
+        if (text.length > containerText.length) {
+          containerText = text;
+        }
+      }
+    }
+    
+    // Try to extract text from WordPress/Elementor specific elements (for this site)
+    const elementorText = Array.from(document.querySelectorAll('.elementor-element, .elementor-widget, .elementor-text-editor, .wp-content'))
+      .map(el => el.innerText || el.textContent || '')
+      .filter(text => text.length > 5)
+      .join(' ');
+    
+    // Choose the best body text extraction method
+    const bodyText = bodyInnerText.length > 100 ? bodyInnerText : bodyTextContent;
+    
+    // Smart text selection - prefer quality over length
+    const allTextOptions = [
+      { text: bodyText, source: 'bodyText' },
+      { text: visibleText, source: 'visibleText' },
+      { text: documentText, source: 'documentText' },
+      { text: containerText, source: 'containerText' },
+      { text: elementorText, source: 'elementorText' }
+    ];
+    
+    // Filter out very short text (likely incomplete)
+    const validTextOptions = allTextOptions.filter(option => option.text.length > 100);
+    
+    // If we have valid options, choose the longest one
+    // If not, take the longest available (even if short)
+    const selectedOption = validTextOptions.length > 0 
+      ? validTextOptions.reduce((longest, current) => 
+          current.text.length > longest.text.length ? current : longest)
+      : allTextOptions.reduce((longest, current) => 
+          current.text.length > longest.text.length ? current : longest);
+    
+    const bestText = selectedOption.text;
+    const bestTextSource = selectedOption.source;
+    
+    const fullText = `${title} ${metaDescription} ${bestText}`.toLowerCase();
+    
+    // Enhanced debug info
+    const debugInfo = {
+      documentState: document.readyState,
+      title: title,
+      metaDescription: metaDescription,
+      bodyTextLength: bodyText.length,
+      visibleTextLength: visibleText.length,
+      documentTextLength: documentText.length,
+      bestTextLength: bestText.length,
+      bestTextSource: bestTextSource,
+      fullTextLength: fullText.length,
+      elementCount: document.querySelectorAll('*').length,
+      textSample: bestText.substring(0, 200) || fullText.substring(0, 200),
+      extractionMethods: {
+        bodyInnerText: bodyInnerText.length,
+        bodyTextContent: bodyTextContent.length,
+        documentInnerText: document.documentElement?.innerText?.length || 0,
+        documentTextContent: document.documentElement?.textContent?.length || 0,
+        visibleElements: allElements.length,
+        visibleTextLength: visibleText.length,
+        documentTextLength: documentText.length,
+        containerTextLength: containerText.length,
+        elementorTextLength: elementorText.length,
+        validOptionsCount: validTextOptions.length,
+        allOptionsCount: allTextOptions.length
+      }
+    };
+    
+    // Get explicit language declarations with enhanced detection
+    const htmlElement = document.documentElement || document.querySelector('html');
+    const htmlLang = (htmlElement?.lang || htmlElement?.getAttribute('lang') || '').toLowerCase().trim();
+    const bodyLang = (document.body?.lang || '').toLowerCase().trim();
     const metaLanguages = Array.from(
-      document.querySelectorAll('meta[http-equiv="Content-Language"], meta[name="language"]')
-    ).map(m => (m.content || '').toLowerCase());
+      document.querySelectorAll('meta[http-equiv="Content-Language"], meta[name="language"], meta[property="og:locale"]')
+    ).map(m => (m.content || '').toLowerCase().trim()).filter(lang => lang.length > 0);
+    
+    // Debug: Log what we're actually seeing
+    console.log('DEBUG HTML lang detection:', {
+      htmlElementExists: !!htmlElement,
+      htmlLang: htmlLang,
+      bodyLang: bodyLang,
+      metaLanguages: metaLanguages,
+      documentHTML: document.documentElement?.outerHTML?.substring(0, 500) || 'No HTML found'
+    });
+    
+    // Parse lang codes to extract primary language (e.g., "fr-FR" -> "fr")
+    const parseLangCode = (langCode) => {
+      if (!langCode) return '';
+      const parts = langCode.split('-');
+      const primary = parts[0];
+      
+      // Map common language codes to full names
+      const langMap = {
+        'en': 'English',
+        'fr': 'French', 
+        'es': 'Spanish',
+        'de': 'German',
+        'it': 'Italian',
+        'pt': 'Portuguese',
+        'ru': 'Russian',
+        'zh': 'Chinese',
+        'ja': 'Japanese',
+        'ko': 'Korean',
+        'ar': 'Arabic',
+        'nl': 'Dutch',
+        'pl': 'Polish',
+        'fa': 'Persian',
+        'pe': 'Persian'
+      };
+      
+      return langMap[primary] || primary;
+    };
+    
+    const declaredLanguages = [
+      parseLangCode(htmlLang),
+      parseLangCode(bodyLang),
+      ...metaLanguages.map(parseLangCode)
+    ].filter(lang => lang.length > 0);
+    
+    const primaryDeclaredLanguage = declaredLanguages[0] || '';
     
     // Language detection patterns - Unicode ranges and common words
     const languagePatterns = {
@@ -487,25 +1080,64 @@ async function detectWebsiteLanguage(page) {
     const textLength = fullText.length;
     
     if (textLength < 50) {
+      // If we have insufficient text but a declared language, use that
+      if (primaryDeclaredLanguage && primaryDeclaredLanguage !== 'none') {
+        return {
+          primaryLanguage: primaryDeclaredLanguage,
+          confidence: 'Medium',
+          reason: 'Based on HTML lang attribute (insufficient content)',
+          declaredLanguage: htmlLang || bodyLang || metaLanguages[0] || 'none',
+          originalDeclaredLanguages: declaredLanguages,
+          languageScore: 'N/A (declared)',
+          textLength: textLength,
+          debugInfo
+        };
+      }
+      
+      // FALLBACK: If browser isn't rendering content properly, try to extract language
+      // from the raw HTML source if available
+      try {
+        const rawHTML = document.documentElement?.outerHTML || '';
+        const htmlLangMatch = rawHTML.match(/<html[^>]+lang=["']([^"']+)["']/i);
+        if (htmlLangMatch) {
+          const rawLang = htmlLangMatch[1].toLowerCase();
+          const primaryLang = parseLangCode(rawLang);
+          if (primaryLang) {
+            return {
+              primaryLanguage: primaryLang,
+              confidence: 'Medium',
+              reason: 'Extracted from raw HTML lang attribute (rendering issue detected)',
+              declaredLanguage: rawLang,
+              originalDeclaredLanguages: [primaryLang],
+              languageScore: 'N/A (raw HTML)',
+              textLength: textLength,
+              debugInfo: {
+                ...debugInfo,
+                rawHTMLLang: rawLang,
+                extractionMethod: 'raw HTML regex'
+              }
+            };
+          }
+        }
+      } catch (e) {
+        console.log('Raw HTML extraction failed:', e.message);
+      }
+      
       return {
         primaryLanguage: 'Unknown',
         confidence: 'Low',
         reason: 'Insufficient text content',
-        declaredLanguage: htmlLang || metaLanguages[0] || 'none',
+        declaredLanguage: htmlLang || bodyLang || metaLanguages[0] || 'none',
         textLength: textLength,
-        allScores: {}
+        allScores: {},
+        debugInfo: debugInfo
       };
     }
     
-    // Check explicit language declarations first
-    let explicitLanguage = null;
-    if (htmlLang) {
-      const langCode = htmlLang.split('-')[0];
-      explicitLanguage = langCode;
-    } else if (metaLanguages.length > 0) {
-      const langCode = metaLanguages[0].split('-')[0];
-      explicitLanguage = langCode;
-    }
+    // Use enhanced language detection from declarations
+    const explicitLanguage = htmlLang ? htmlLang.split('-')[0] : 
+                             bodyLang ? bodyLang.split('-')[0] :
+                             metaLanguages.length > 0 ? metaLanguages[0].split('-')[0] : null;
     
     // Score each language
     Object.entries(languagePatterns).forEach(([language, patterns]) => {
@@ -655,8 +1287,156 @@ async function detectWebsiteLanguage(page) {
           words: score.words,
           phrases: score.phrases
         }
-      }))
+      })),
+      debugInfo: debugInfo
     };
+  });
+}
+
+// ── Helper: Get detailed timing breakdown ──────────────────────────────────
+async function getDetailedTimings(page) {
+  return await page.evaluate(() => {
+    const perf = performance.getEntriesByType('navigation')[0];
+    if (!perf) return null;
+    
+    // Helper function to safely calculate timing differences
+    const safeTiming = (end, start) => {
+      if (end && start && end > 0 && start > 0 && end >= start) {
+        return end - start;
+      }
+      return null;
+    };
+    
+    // Navigation timing milestones (relative to navigationStart)
+    const navigationStart = 0; // Always 0 as reference point
+    const fetchStart = safeTiming(perf.fetchStart, perf.navigationStart);
+    const domainLookupStart = safeTiming(perf.domainLookupStart, perf.navigationStart);
+    const domainLookupEnd = safeTiming(perf.domainLookupEnd, perf.navigationStart);
+    const connectStart = safeTiming(perf.connectStart, perf.navigationStart);
+    const connectEnd = safeTiming(perf.connectEnd, perf.navigationStart);
+    const secureConnectionStart = perf.secureConnectionStart > 0 ? safeTiming(perf.secureConnectionStart, perf.navigationStart) : null;
+    const requestStart = safeTiming(perf.requestStart, perf.navigationStart);
+    const responseStart = safeTiming(perf.responseStart, perf.navigationStart);
+    const responseEnd = safeTiming(perf.responseEnd, perf.navigationStart);
+    const domInteractive = safeTiming(perf.domInteractive, perf.navigationStart);
+    const domContentLoadedEventStart = safeTiming(perf.domContentLoadedEventStart, perf.navigationStart);
+    const domContentLoadedEventEnd = safeTiming(perf.domContentLoadedEventEnd, perf.navigationStart);
+    const loadEventStart = safeTiming(perf.loadEventStart, perf.navigationStart);
+    const loadEventEnd = safeTiming(perf.loadEventEnd, perf.navigationStart);
+    
+    // Calculate gap times between each milestone
+    const gapTimes = {
+      navigationToFetch: fetchStart,
+      fetchToDomainLookupStart: safeTiming(perf.domainLookupStart, perf.fetchStart),
+      domainLookupStartToEnd: safeTiming(perf.domainLookupEnd, perf.domainLookupStart),
+      domainLookupEndToConnectStart: safeTiming(perf.connectStart, perf.domainLookupEnd),
+      connectStartToEnd: safeTiming(perf.connectEnd, perf.connectStart),
+      connectEndToRequestStart: safeTiming(perf.requestStart, perf.connectEnd),
+      requestStartToResponseStart: safeTiming(perf.responseStart, perf.requestStart),
+      responseStartToEnd: safeTiming(perf.responseEnd, perf.responseStart),
+      responseEndToDomInteractive: safeTiming(perf.domInteractive, perf.responseEnd),
+      domInteractiveToDomContentLoadedStart: safeTiming(perf.domContentLoadedEventStart, perf.domInteractive),
+      domContentLoadedStartToEnd: safeTiming(perf.domContentLoadedEventEnd, perf.domContentLoadedEventStart),
+      domContentLoadedEndToLoadEventStart: safeTiming(perf.loadEventStart, perf.domContentLoadedEventEnd),
+      loadEventStartToEnd: safeTiming(perf.loadEventEnd, perf.loadEventStart),
+    };
+
+    // TLS-specific timing (if HTTPS)
+    if (perf.secureConnectionStart > 0) {
+      gapTimes.connectStartToSecureStart = safeTiming(perf.secureConnectionStart, perf.connectStart);
+      gapTimes.secureStartToConnectEnd = safeTiming(perf.connectEnd, perf.secureConnectionStart);
+    }
+    
+    // Calculate individual network phases (legacy compatibility)
+    const dnsLookupTime = safeTiming(perf.domainLookupEnd, perf.domainLookupStart);
+    const tcpConnectTime = safeTiming(perf.connectEnd, perf.connectStart);
+    const tlsTime = (perf.secureConnectionStart > 0) ? safeTiming(perf.connectEnd, perf.secureConnectionStart) : null;
+    const requestTime = safeTiming(perf.responseStart, perf.requestStart);
+    const responseTime = safeTiming(perf.responseEnd, perf.responseStart);
+    
+    // Calculate processing phases
+    const domProcessingTime = safeTiming(perf.domContentLoadedEventEnd, perf.responseEnd);
+    const resourceLoadingTime = safeTiming(perf.loadEventEnd, perf.domContentLoadedEventEnd);
+    
+    // Calculate totals (with fallbacks)
+    const totalNetworkTime = safeTiming(perf.responseEnd, perf.fetchStart) || 
+                            (requestTime && responseTime ? requestTime + responseTime : null);
+    const totalPageTime = safeTiming(perf.loadEventEnd, perf.fetchStart);
+    
+    return {
+      // Individual network phases (matching display property names)
+      dnsLookupTime,
+      tcpConnectTime, 
+      tlsTime,
+      requestTime,
+      responseTime,
+      
+      // Processing phases
+      domProcessingTime,
+      resourceLoadingTime,
+      
+      // Totals
+      totalNetworkTime,
+      totalPageTime,
+      
+      // Navigation milestone timestamps (relative to navigationStart)
+      milestones: {
+        navigationStart,
+        fetchStart,
+        domainLookupStart,
+        domainLookupEnd,
+        connectStart,
+        connectEnd,
+        secureConnectionStart,
+        requestStart,
+        responseStart,
+        responseEnd,
+        domInteractive,
+        domContentLoadedEventStart,
+        domContentLoadedEventEnd,
+        loadEventStart,
+        loadEventEnd
+      },
+      
+      // Gap times between each milestone
+      gapTimes,
+      
+      // Raw values for debugging
+      _raw: {
+        fetchStart: perf.fetchStart,
+        domainLookupStart: perf.domainLookupStart,
+        domainLookupEnd: perf.domainLookupEnd,
+        connectStart: perf.connectStart,
+        connectEnd: perf.connectEnd,
+        secureConnectionStart: perf.secureConnectionStart,
+        requestStart: perf.requestStart,
+        responseStart: perf.responseStart,
+        responseEnd: perf.responseEnd,
+        domInteractive: perf.domInteractive,
+        domContentLoadedEventStart: perf.domContentLoadedEventStart,
+        domContentLoadedEventEnd: perf.domContentLoadedEventEnd,
+        loadEventStart: perf.loadEventStart,
+        loadEventEnd: perf.loadEventEnd
+      }
+    };
+  });
+}
+
+// ── Helper: Get paint timings ──────────────────────────────────────────────
+async function getPaintTimings(page) {
+  return await page.evaluate(() => {
+    const paintEntries = performance.getEntriesByType('paint');
+    const result = {};
+    
+    paintEntries.forEach(entry => {
+      if (entry.name === 'first-paint') {
+        result.firstPaint = entry.startTime;
+      } else if (entry.name === 'first-contentful-paint') {
+        result.firstContentfulPaint = entry.startTime;
+      }
+    });
+    
+    return result;
   });
 }
 
@@ -1075,10 +1855,7 @@ function extractDomain(url) {
   executablePath: './chromium/chrome-headless-shell-linux64/chrome-headless-shell',
   args: [
     // ═══ BASIC BROWSER FLAGS ═══
-    '--autoplay-policy=no-user-gesture-required',
     '--no-sandbox',
-    '--mute-audio',
-    '--disable-gpu',
     '--enable-unsafe-swiftshader',
     '--ignore-certificate-errors',
 
@@ -1104,11 +1881,14 @@ function extractDomain(url) {
     '--disable-prompt-on-repost',
     '--disable-domain-reliability',
 
+    '--disable-service-worker',
+    '--disable-extensions',
+
     // ═══ QUIC-SPECIFIC ═══
     '--origin-to-force-quic-on=*',
 
-    // ═══ SECURITY/ENCRYPTION ═══
-    // '--disable-features=PostQuantumKeyAgreement,EncryptedClientHello',
+    // ═══ SECURITY/ENCRYPTION Finally!!!!!!!!!!!!!!!!!!!!!!!!! google and cloudflare is working  ═══
+    '--disable-features=PostQuantumKyber',
 
     // ═══ LOGGING ═══
     '--log-net-log=netlog.json',
@@ -1139,6 +1919,9 @@ function extractDomain(url) {
 
   let browser = await puppeteer.launch(launchOpts);
   let page    = await browser.newPage();
+
+  // ═══ ENABLE REQUEST INTERCEPTION FOR FILTERING ═══
+  await page.setRequestInterception(true);
 
   // ═══ STEALTH CONFIGURATIONS TO AVOID BOT DETECTION ═══
   
@@ -1319,7 +2102,26 @@ function extractDomain(url) {
     page.on('request', req => {
       const url = req.url();
       const domain = extractDomain(url);
+      const resourceType = req.resourceType();
       const isLoadBlocking = isLoadBlockingResource(req);
+      
+      // Check if we should ignore this request
+      const filterResult = shouldIgnoreRequest(url, resourceType, isLoadBlocking);
+      if (filterResult.shouldIgnore) {
+        // Track filtering statistics
+        filteredRequestsStats[filterResult.reason]++;
+        filteredRequestsStats.total_filtered++;
+        
+        // Log the ignored request with detailed reason
+        networkLog(`[FILTERED] ${filterResult.detail}`);
+        
+        // Actually abort the request to prevent it from loading
+        req.abort('blockedbyclient');
+        return;
+      }
+      
+      // Continue with the request if not filtered
+      req.continue();
       
       // RELIABILITY NOTE: Determining load-blocking behavior is complex
       // 
@@ -1623,6 +2425,9 @@ function extractDomain(url) {
         browser = await puppeteer.launch(tcpLaunchOpts);
         page = await browser.newPage();
         
+        // ═══ ENABLE REQUEST INTERCEPTION FOR FILTERING ═══
+        await page.setRequestInterception(true);
+        
         // Re-apply all browser configurations
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         await page.setViewport({ 
@@ -1784,21 +2589,16 @@ function extractDomain(url) {
       
       // ═══ SET REALISTIC HTTP HEADERS ═══
       await page.setExtraHTTPHeaders({
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Encoding': 'identity',
         // 'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'Sec-CH-UA': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        'Sec-CH-UA-Mobile': '?0',
-        'Sec-CH-UA-Platform': '"Windows"',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
+        'Upgrade-Insecure-Requests': '1',
         'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-User': '?1',
-        'Upgrade-Insecure-Requests': '1'
+        'Sec-Fetch-Dest': 'document'
       });
-      
+            
       const t0 = Date.now();
       
       // Progressive timeout that resets on network activity
@@ -1866,7 +2666,7 @@ function extractDomain(url) {
       }
       
       // Check if main response status is not 200 and should retry (but not for TCP attempts)
-      const status = response.status();
+      const status = response ? response.status() : 0;
       if (status !== 200 && attempt < MAX_RETRIES && !useTcp) {
         // Track the highest priority status code even during retries
         updatePriorityStatus(status);
@@ -2000,25 +2800,235 @@ function extractDomain(url) {
     log(`🔧 TCP fallback: ${tcpFallback ? 'ENABLED' : 'DISABLED'}`);
     const { response, startTime } = await attemptPageLoad();
 
-    if (mainStatus === null) {                    // fallback
+    // Handle case where response is null
+    if (response === null) {
+      networkLog(`❌ Response is null - using fallback values`);
+      if (mainStatus === null) {
+        mainStatus = 0; // Use 0 to indicate no response received
+      }
+      if (!mainHeaders || Object.keys(mainHeaders).length === 0) {
+        mainHeaders = {};
+      }
+    } else if (mainStatus === null) {                    // fallback when response exists
       mainStatus  = response.status();
       mainHeaders = response.headers();
     }
 
     const baseLoadTime = ((Date.now() - startTime) / 1000);
-    const country    = await getCountryFromDNS(targetUrl);
-
-    // ── Add status and load time logging with timestamp ──────────────────────
-    const protocol = useProxy ? '(proxy)' : '(direct)';
-    networkLog(`${mainStatus} https://${targetUrl}, ${country.countryName || 'Unknown'} (${country.country || 'XX'}) ${protocol}`);
     
-    // ── Fetch proxy statistics to check for DNS fallback ───────────────────
-    let proxyStats = { total_opened_streams: 0, total_redirects: 0, total_data_amount: 0, total_migrated_data_amount: 0, migration_success_rate: '0%', dns_fallback_occurred: false };
+    // ── Collect detailed timing breakdown ───────────────────────────────────
+    let detailedTimings;
+    let paintTimings;
+    try {
+      detailedTimings = await getDetailedTimings(page);
+      paintTimings = await getPaintTimings(page);
+      
+      // Helper function to format timing values
+      const formatTiming = (value, reason = '') => {
+        if (value === null || value === undefined) {
+          return reason ? `N/A (${reason})` : 'N/A';
+        }
+        return `${value.toFixed(2)}ms`;
+      };
+      
+      // Log element-based timing breakdown that sums to total page load time
+      log(`\n⏱️  PAGE LOAD TIME BREAKDOWN`);
+      log(`Elements that contribute to total page load time:`);
+      
+      // Calculate actual element contributions that sum to total
+      const elements = [];
+      let runningTotal = 0;
+      
+      // Add each timing element if it exists and is > 0
+      if (detailedTimings.gapTimes) {
+        const gaps = detailedTimings.gapTimes;
+        
+        if (gaps.navigationToFetch && gaps.navigationToFetch > 0) {
+          elements.push({ name: 'Navigation Start → Fetch Start', time: gaps.navigationToFetch, description: 'Initial navigation delay' });
+          runningTotal += gaps.navigationToFetch;
+        }
+        
+        if (gaps.fetchToDomainLookupStart && gaps.fetchToDomainLookupStart > 0) {
+          elements.push({ name: 'Fetch Start → DNS Lookup Start', time: gaps.fetchToDomainLookupStart, description: 'Pre-DNS delay' });
+          runningTotal += gaps.fetchToDomainLookupStart;
+        }
+        
+        if (gaps.domainLookupStartToEnd && gaps.domainLookupStartToEnd > 0) {
+          elements.push({ name: 'DNS Lookup', time: gaps.domainLookupStartToEnd, description: 'Domain name resolution' });
+          runningTotal += gaps.domainLookupStartToEnd;
+        }
+        
+        if (gaps.domainLookupEndToConnectStart && gaps.domainLookupEndToConnectStart > 0) {
+          elements.push({ name: 'DNS → Connection Start', time: gaps.domainLookupEndToConnectStart, description: 'Pre-connection delay' });
+          runningTotal += gaps.domainLookupEndToConnectStart;
+        }
+        
+        if (gaps.connectStartToEnd && gaps.connectStartToEnd > 0) {
+          elements.push({ name: 'Connection Establishment', time: gaps.connectStartToEnd, description: 'TCP/QUIC connection + TLS handshake' });
+          runningTotal += gaps.connectStartToEnd;
+        }
+        
+        if (gaps.connectEndToRequestStart && gaps.connectEndToRequestStart > 0) {
+          elements.push({ name: 'Connection → Request Start', time: gaps.connectEndToRequestStart, description: 'Pre-request delay' });
+          runningTotal += gaps.connectEndToRequestStart;
+        }
+        
+        if (gaps.requestStartToResponseStart && gaps.requestStartToResponseStart > 0) {
+          elements.push({ name: 'Request Processing', time: gaps.requestStartToResponseStart, description: 'Server processing time' });
+          runningTotal += gaps.requestStartToResponseStart;
+        }
+        
+        if (gaps.responseStartToEnd && gaps.responseStartToEnd > 0) {
+          elements.push({ name: 'Response Download', time: gaps.responseStartToEnd, description: 'HTML document download' });
+          runningTotal += gaps.responseStartToEnd;
+        }
+        
+        if (gaps.responseEndToDomInteractive && gaps.responseEndToDomInteractive > 0) {
+          elements.push({ name: 'DOM Parsing', time: gaps.responseEndToDomInteractive, description: 'HTML parsing and DOM construction' });
+          runningTotal += gaps.responseEndToDomInteractive;
+        }
+        
+        if (gaps.domInteractiveToDomContentLoadedStart && gaps.domInteractiveToDomContentLoadedStart > 0) {
+          elements.push({ name: 'DOM Interactive → DOMContentLoaded', time: gaps.domInteractiveToDomContentLoadedStart, description: 'Script execution before DOMContentLoaded' });
+          runningTotal += gaps.domInteractiveToDomContentLoadedStart;
+        }
+        
+        if (gaps.domContentLoadedStartToEnd && gaps.domContentLoadedStartToEnd > 0) {
+          elements.push({ name: 'DOMContentLoaded Event', time: gaps.domContentLoadedStartToEnd, description: 'DOMContentLoaded event handlers' });
+          runningTotal += gaps.domContentLoadedStartToEnd;
+        }
+        
+        if (gaps.domContentLoadedEndToLoadEventStart && gaps.domContentLoadedEndToLoadEventStart > 0) {
+          elements.push({ name: 'Resource Loading', time: gaps.domContentLoadedEndToLoadEventStart, description: 'Images, stylesheets, scripts loading' });
+          runningTotal += gaps.domContentLoadedEndToLoadEventStart;
+        }
+        
+        if (gaps.loadEventStartToEnd && gaps.loadEventStartToEnd > 0) {
+          elements.push({ name: 'Load Event', time: gaps.loadEventStartToEnd, description: 'Window load event handlers' });
+          runningTotal += gaps.loadEventStartToEnd;
+        }
+      }
+      
+      // Display each element with running total
+      let cumulativeTime = 0;
+      elements.forEach((element, index) => {
+        cumulativeTime += element.time;
+        const percentage = detailedTimings.totalPageTime > 0 ? ((element.time / detailedTimings.totalPageTime) * 100).toFixed(1) : '0.0';
+        log(`  ${index + 1}. ${element.name}: ${formatTiming(element.time)} (${percentage}%) - ${element.description}`);
+        log(`     Cumulative: ${formatTiming(cumulativeTime)}`);
+      });
+      
+      // Show verification
+      log(`\n📊 VERIFICATION:`);
+      log(`  Sum of elements: ${formatTiming(runningTotal)}`);
+      log(`  Total page time: ${formatTiming(detailedTimings.totalPageTime)}`);
+      const difference = Math.abs((runningTotal || 0) - (detailedTimings.totalPageTime || 0));
+      if (difference < 1) {
+        log(`  ✅ Times match (difference: ${formatTiming(difference)})`);
+      } else {
+        log(`  ⚠️  Times differ by: ${formatTiming(difference)}`);
+      }
+      
+      if (paintTimings && (paintTimings.firstPaint !== null || paintTimings.firstContentfulPaint !== null)) {
+        log(`\n🎨 VISUAL TIMING:`);
+        log(`  First Paint: ${formatTiming(paintTimings.firstPaint)}`);
+        log(`  First Contentful Paint: ${formatTiming(paintTimings.firstContentfulPaint)}`);
+        log(`  Time to Interactive: ${formatTiming(paintTimings.timeToInteractive)}`);
+      }
+    } catch (timingError) {
+      networkLog(`Warning: Could not collect detailed timing data: ${timingError.message}`);
+      detailedTimings = null;
+      paintTimings = null;
+    }
+    
+    let country = await getCountryFromDNS(targetUrl);
+    
+    // ── Fetch proxy statistics to check for real IP ───────────────────────
+    let proxyStats = { total_opened_streams: 0, total_redirects: 0, total_data_amount: 0, total_migrated_data_amount: 0, total_stateless_resets: 0, total_migration_disabled: 0, migration_success_rate: '0%', dns_fallback_occurred: false, connections_detail: '' };
     if (useProxy) {
       try {
         const fetchedStats = await fetchProxyStats();
         if (fetchedStats) {
           proxyStats = fetchedStats;
+          networkLog(`Proxy stats retrieved: ${proxyStats.total_opened_streams} streams, ${proxyStats.total_redirects} redirects, ${proxyStats.total_data_amount} bytes total, ${proxyStats.total_migrated_data_amount} bytes migrated`);
+          
+          // Try to get real IP from proxy connections
+          if (proxyStats.connections_detail) {
+            // Parse and display ALL connection details
+            const allConnections = parseConnectionsDetail(proxyStats.connections_detail);
+            
+            if (allConnections.length > 0) {
+              log(`\n=== PROXY CONNECTION DETAILS ===`);
+              log(`Total connections established: ${allConnections.length}`);
+              
+              allConnections.forEach((conn, index) => {
+                // Check if connection failed
+                if (conn.connectionFailed) {
+                  log(`❌ Connection ${index + 1} (FAILED):`);
+                  log(`   Domain: ${conn.domain}`);
+                  log(`   IP: ${conn.ip}:${conn.port}`);
+                  log(`   Status: ${conn.failureReason || 'Unknown failure'}`);
+                } else {
+                  // Successful connection display (existing logic)
+                  log(`✅ Connection ${index + 1} (SUCCESS):`);
+                  log(`   Domain: ${conn.domain}`);
+                  log(`   IP: ${conn.ip}:${conn.port}`);
+                  log(`   Data: ${conn.totalData} bytes (Previous: ${conn.previousPath}, Migrated: ${conn.migratedPath})`);
+                  log(`   Migration disabled: ${conn.migrationDisabled}`);
+                  log(`   Stateless reset: ${conn.statelessReset}`);
+                  log(`   New connection ID received: ${conn.newConnectionIdReceived}`);
+                  log(`   Path validation state: ${conn.pathValidationState}`);
+                  
+                  if (Object.keys(conn.statusInfo).length > 0) {
+                    const statusStr = Object.entries(conn.statusInfo)
+                      .map(([code, count]) => `${code}:${count}`)
+                      .join(' ');
+                    log(`   Status codes: ${statusStr}`);
+                  } else {
+                    log(`   Status codes: none`);
+                  }
+                  
+                  // Calculate migration efficiency for successful connections
+                  if (conn.totalData > 0) {
+                    const migrationPct = ((conn.migratedPath / conn.totalData) * 100).toFixed(1);
+                    log(`   Migration efficiency: ${migrationPct}%`);
+                  }
+                }
+              });
+              
+              // Summary statistics
+              const totalData = allConnections.reduce((sum, conn) => sum + conn.totalData, 0);
+              const totalMigrated = allConnections.reduce((sum, conn) => sum + conn.migratedPath, 0);
+              const migrationDisabledCount = allConnections.filter(conn => conn.migrationDisabled).length;
+              const statelessResetCount = allConnections.filter(conn => conn.statelessReset).length;
+              
+              log(`\n📊 CONNECTION SUMMARY:`);
+              log(`   Total data transferred: ${totalData} bytes (${(totalData / 1024).toFixed(2)} KB)`);
+              log(`   Total migrated data: ${totalMigrated} bytes (${(totalMigrated / 1024).toFixed(2)} KB)`);
+              log(`   Overall migration efficiency: ${totalData > 0 ? ((totalMigrated / totalData) * 100).toFixed(1) : 0}%`);
+              log(`   Connections with migration disabled: ${migrationDisabledCount}/${allConnections.length}`);
+              log(`   Connections with stateless resets: ${statelessResetCount}/${allConnections.length}`);
+              log(`======================================\n`);
+            }
+            
+            // Extract real IP for target domain
+            const realIPInfo = extractRealIPFromProxy(targetUrl, proxyStats);
+            if (realIPInfo) {
+              networkLog(`🌍 [REAL-IP] Using proxy connection IP: ${realIPInfo.ip} instead of DNS IP: ${country.ip}`);
+              country = {
+                ip: realIPInfo.ip,
+                country: country.country, // Keep original country info
+                countryName: country.countryName // Keep original country info
+              };
+              
+              // Log target domain specific info
+              networkLog(`🎯 [TARGET-DOMAIN] ${realIPInfo.domain} -> ${realIPInfo.ip}:${realIPInfo.port || '443'}`);
+              networkLog(`🎯 [TARGET-DATA] ${realIPInfo.totalData} bytes, Migration disabled: ${realIPInfo.migrationDisabled}`);
+              if (Object.keys(realIPInfo.statusInfo).length > 0) {
+                networkLog(`🎯 [TARGET-STATUS] ${JSON.stringify(realIPInfo.statusInfo)}`);
+              }
+            }
+          }
         } else {
           networkLog(`[WARNING] No proxy statistics found.`);
         }
@@ -2026,23 +3036,19 @@ function extractDomain(url) {
         networkLog(`[WARNING] Failed to fetch proxy statistics: ${proxyErr.message}`);
       }
     }
-    
-    // ── Adjust load time based on DNS fallback ─────────────────────────────
-    let adjustedLoadTime = baseLoadTime;
+
+    // ── Pure load time without adjustments ─────────────────────────────────
+    const loadTime = baseLoadTime.toFixed(2);
     if (proxyStats.dns_fallback_occurred) {
-      adjustedLoadTime = Math.max(0, baseLoadTime - 3); // Subtract 3 seconds, but don't go below 0
-      networkLog(`DNS Fallback detected - Adjusting load time: ${baseLoadTime.toFixed(2)}s -> ${adjustedLoadTime.toFixed(2)}s (-3s)`);
+      networkLog(`DNS Fallback detected - Pure load time: ${loadTime}s`);
     }
-    const loadTime = adjustedLoadTime.toFixed(2);
-    
-    networkLog(`Load time: ${loadTime}s | Bytes: ${(totalBytes / 1024).toFixed(2)} KB`);
 
     // ═══ CLOUDFLARE CHALLENGE DETECTION ═══
     let cloudflareChallenge = '';
     let cloudflareDetected = 'No';
     
     // Check if main response was redirected to Cloudflare challenge
-    const finalUrl = response.url();
+    const finalUrl = response ? response.url() : `https://${targetUrl}`;
     if (finalUrl.includes('challenges.cloudflare.com')) {
       cloudflareChallenge = ' [CLOUDFLARE CHALLENGE]';
       cloudflareDetected = 'Yes';
@@ -2166,6 +3172,12 @@ function extractDomain(url) {
     
     log(`\n=== RESOURCE SUMMARY ===`);
     log(`Resources: ${totalRequested} total, ${uniqueDomainsRequested} unique domains`);
+    
+    // Show filtering statistics if any requests were filtered
+    if (filteredRequestsStats.total_filtered > 0) {
+      log(`Filtered: ${filteredRequestsStats.total_filtered} requests ignored (${filteredRequestsStats.blocked_domain} ad/tracking domains, ${filteredRequestsStats.non_essential_resource} non-essential XHR/Fetch)`);
+    }
+    
     log(`Load Event: ${loadBlockingResources} blocking, ${nonLoadBlockingResources} non-blocking`);
     log(`Domains: ${totalSucceeded}/${uniqueDomainsRequested} succeeded, ${failedDomains.size} failed, ${pendingDomains.size} pending`);
     log(`Failures: ${totalFailed} total (${httpErrorFailures.length} HTTP errors, ${resetFailures.length} connection errors, ${abortedFailures.length} aborted)`);
@@ -2225,15 +3237,13 @@ function extractDomain(url) {
     }
     
     
-    log(`\n=== DETAILED DOMAIN STATISTICS FOR LOAD ===`);
+    log(`\n=== DETAILED DOMAIN STATISTICS ===`);
     
     // Sort domains by total requests (most active first)
     const sortedDomains = Array.from(domainStats.entries()).sort((a, b) => b[1].totalRequests - a[1].totalRequests);
     
-    // First pass: domains with load-blocking resources
-    const loadRelatedDomains = sortedDomains.filter(([domain, stats]) => stats.loadBlockingRequests > 0);
-    
-    loadRelatedDomains.forEach(([domain, stats]) => {
+    // Show all domains together
+    sortedDomains.forEach(([domain, stats]) => {
       const successRate = stats.totalRequests > 0 ? ((stats.successfulRequests / stats.totalRequests) * 100).toFixed(1) : '0';
       
       log(`\n${domain} (${stats.ip || 'unknown'}):`);
@@ -2311,73 +3321,6 @@ function extractDomain(url) {
       }
     });
     
-    log(`\n=== DETAILED DOMAIN STATISTICS NOT RELATED TO LOAD ===`);
-    
-    // Second pass: domains with only non-load-blocking resources
-    const nonLoadRelatedDomains = sortedDomains.filter(([domain, stats]) => stats.loadBlockingRequests === 0);
-    
-    nonLoadRelatedDomains.forEach(([domain, stats]) => {
-      const successRate = stats.totalRequests > 0 ? ((stats.successfulRequests / stats.totalRequests) * 100).toFixed(1) : '0';
-      
-      log(`\n${domain} (${stats.ip || 'unknown'}):`);
-      log(`  Requests: ${stats.totalRequests} total, ${stats.successfulRequests} success, ${stats.failedRequests} failed (${successRate}% success rate)`);
-      log(`  Load Event: ${stats.loadBlockingRequests} blocking, ${stats.nonLoadBlockingRequests} non-blocking`);
-      log(`  Data: ${(stats.totalBytes / 1024).toFixed(2)} KB`);
-      
-      if (stats.httpErrorRequests > 0 || stats.connectionErrorRequests > 0) {
-        log(`  Errors: ${stats.httpErrorRequests} HTTP errors, ${stats.connectionErrorRequests} connection errors`);
-      }
-      
-      // Show status code distribution
-      if (stats.statusCodes.size > 0) {
-        const statusSummary = Array.from(stats.statusCodes.entries())
-          .filter(([code, count]) => !code.includes('x')) // Only show specific codes, not ranges
-          .sort((a, b) => b[1] - a[1]) // Sort by count
-          .slice(0, 5) // Top 5 status codes
-          .map(([code, count]) => `${code}:${count}`)
-          .join(', ');
-        if (statusSummary) {
-          log(`  Status codes: ${statusSummary}`);
-        }
-      }
-      
-      // Show resource type breakdown with details - only non-blocking resources
-      if (stats.resourceTypes.size > 0) {
-        // Show non-load-blocking resources (these domains have no blocking resources)
-        const nonBlockingResources = Array.from(stats.resourceTypes.entries())
-          .filter(([type, counts]) => counts.nonLoadBlocking > 0)
-          .sort((a, b) => b[1].nonLoadBlocking - a[1].nonLoadBlocking)
-          .map(([type, counts]) => {
-            let typeStr = `${type}:${counts.nonLoadBlocking}`;
-            if (counts.failed > 0) {
-              typeStr += ` (${counts.failed} failed)`;
-            }
-            return typeStr;
-          })
-          .join(', ');
-        
-        if (nonBlockingResources) {
-          log(`  Non-load-blocking resources: ${nonBlockingResources}`);
-        }
-        
-        // Show detailed breakdown for domains with failures
-        if (stats.failedRequests > 0) {
-          log(`  Detailed resource failures:`);
-          stats.resourceTypes.forEach((counts, type) => {
-            if (counts.failed > 0) {
-              log(`    ${type}: ${counts.httpErrors} HTTP errors, ${counts.connectionErrors} connection errors`);
-            }
-          });
-        }
-      }
-      
-      // Show error messages if any
-      if (stats.errorMessages.size > 0) {
-        const errorSummary = Array.from(stats.errorMessages).slice(0, 2).join(', '); // Show first 2 errors
-        log(`  Errors: ${errorSummary}${stats.errorMessages.size > 2 ? '...' : ''}`);
-      }
-    });
-    
     if (failedDomains.size > 0) {
       log(`\n=== FAILED DOMAINS DETAIL ===`);
       failedDomains.forEach((info, domain) => {
@@ -2415,7 +3358,7 @@ function extractDomain(url) {
       });
     }
 
-    log(`${mainStatus} ${response.url()}, ${country.countryName} (${country.country})${cloudflareChallenge}`);
+    log(`${mainStatus} ${response ? response.url() : `https://${targetUrl}`}, ${country.countryName} (${country.country})${cloudflareChallenge}`);
     log(`Load time: ${loadTime}s | Bytes: ${(totalBytes/1024).toFixed(2)} KB`);
 
     // ── LANGUAGE DETECTION ANALYSIS ─────────────────────────────────────────
@@ -2453,6 +3396,161 @@ function extractDomain(url) {
       } else {
         // Use standard multi-language detection
         languageResults = await detectWebsiteLanguage(page);
+        
+        // FALLBACK: If browser rendering failed (very few elements), try raw HTML via curl
+        if (languageResults.debugInfo?.elementCount < 5 && 
+            languageResults.primaryLanguage === 'Unknown' && 
+            languageResults.textLength < 10) {
+          
+          log(`🔄 Browser rendering failure detected (${languageResults.debugInfo?.elementCount} elements). Trying curl fallback...`);
+          
+          try {
+            const { execSync } = await import('child_process');
+            const currentUrl = `https://${targetUrl}`;
+            log(`📡 Fetching raw HTML for: ${currentUrl}`);
+            
+            // Execute curl with proxy settings and timeout (fallback to no proxy if needed)
+            let curlCommand = `curl -s --max-time 15 --connect-timeout 10 --proxy http://localhost:${proxyPort} "${currentUrl}"`;
+            let rawHTML = '';
+            
+            // First try with proxy
+            try {
+              rawHTML = execSync(curlCommand, { 
+                encoding: 'utf8',
+                timeout: 20000,
+                maxBuffer: 1024 * 1024 // 1MB limit
+              });
+            } catch (proxyError) {
+              // If proxy fails, try without proxy as fallback
+              log(`⚠️ Curl with proxy failed, trying without proxy...`);
+              curlCommand = `curl -s --max-time 15 --connect-timeout 10 "${currentUrl}"`;
+              rawHTML = execSync(curlCommand, { 
+                encoding: 'utf8',
+                timeout: 20000,
+                maxBuffer: 1024 * 1024 // 1MB limit
+              });
+            }
+
+            
+            if (rawHTML && rawHTML.length > 100) {
+              log(`✅ Raw HTML fetched successfully: ${rawHTML.length} chars`);
+              
+              // Extract language from HTML lang attribute
+              const htmlLangMatch = rawHTML.match(/<html[^>]+lang=["']([^"']+)["']/i);
+              if (htmlLangMatch) {
+                const rawLang = htmlLangMatch[1].toLowerCase();
+                log(`🔍 Found lang attribute: ${rawLang}`);
+                
+                // Parse language code with wildcard support (e.g., "fr-FR" -> "French") 
+                const parseLanguageCode = (langCode) => {
+                  const baseLangMappings = {
+                    'fr': 'French',    // fr, fr-fr, fr-ca, fr-be, etc.
+                    'en': 'English',   // en, en-us, en-gb, en-au, etc.
+                    'es': 'Spanish',   // es, es-es, es-mx, es-ar, etc.
+                    'de': 'German',    // de, de-de, de-at, de-ch, etc.
+                    'it': 'Italian',   // it, it-it, it-ch, etc.
+                    'pt': 'Portuguese',// pt, pt-br, pt-pt, etc.
+                    'ru': 'Russian',   // ru, ru-ru, etc.
+                    'ja': 'Japanese',  // ja, ja-jp, etc.
+                    'ko': 'Korean',    // ko, ko-kr, etc.
+                    'zh': 'Chinese',   // zh, zh-cn, zh-tw, zh-hk, etc.
+                    'ar': 'Arabic',    // ar, ar-sa, ar-ae, etc.
+                    'nl': 'Dutch',     // nl, nl-nl, nl-be, etc.
+                    'pl': 'Polish',    // pl, pl-pl, etc.
+                    'sv': 'Swedish',   // sv, sv-se, etc.
+                    'no': 'Norwegian', // no, no-no, nb-no, etc.
+                    'da': 'Danish',    // da, da-dk, etc.
+                    'fi': 'Finnish',   // fi, fi-fi, etc.
+                    'tr': 'Turkish',   // tr, tr-tr, etc.
+                    'he': 'Hebrew',    // he, he-il, etc.
+                    'hi': 'Hindi',     // hi, hi-in, etc.
+                    'th': 'Thai',      // th, th-th, etc.
+                    'vi': 'Vietnamese',// vi, vi-vn, etc.
+                    'cs': 'Czech',     // cs, cs-cz, etc.
+                    'hu': 'Hungarian', // hu, hu-hu, etc.
+                    'ro': 'Romanian',  // ro, ro-ro, etc.
+                    'sk': 'Slovak',    // sk, sk-sk, etc.
+                    'bg': 'Bulgarian', // bg, bg-bg, etc.
+                    'hr': 'Croatian',  // hr, hr-hr, etc.
+                    'el': 'Greek',     // el, el-gr, etc.
+                    'fa': 'Persian',   // fa, fa-ir, etc.
+                    'ms': 'Malay',     // ms, ms-my, etc.
+                    'id': 'Indonesian',// id, id-id, etc.
+                    'tl': 'Filipino',  // tl, tl-ph, etc.
+                    'sw': 'Swahili'    // sw, sw-ke, etc.
+                  };
+                  
+                  // Extract base language (e.g., "fr-FR" -> "fr")
+                  const baseLang = langCode.split('-')[0].toLowerCase();
+                  return baseLangMappings[baseLang] || null;
+                };
+                
+                const detectedLang = parseLanguageCode(rawLang) || 'Unknown';
+                
+                if (detectedLang !== 'Unknown') {
+                  log(`🎯 Successfully extracted language from raw HTML: ${detectedLang} (${rawLang})`);
+                  
+                  // Override the failed language results
+                  languageResults = {
+                    primaryLanguage: detectedLang,
+                    confidence: 'Medium',
+                    score: 0.8,
+                    reason: `Extracted from raw HTML lang attribute via curl (browser rendering failed with ${languageResults.debugInfo?.elementCount} elements)`,
+                    declaredLanguage: detectedLang,
+                    textLength: languageResults.textLength,
+                    debugInfo: {
+                      ...languageResults.debugInfo,
+                      curlFallback: true,
+                      rawHTMLLength: rawHTML.length,
+                      extractedLangAttribute: rawLang,
+                      curlCommand: curlCommand
+                    }
+                  };
+                } else {
+                  log(`❌ Language code '${rawLang}' not recognized`);
+                }
+              } else {
+                log(`❌ No lang attribute found in raw HTML`);
+                // Show a sample of the raw HTML for debugging
+                const sample = rawHTML.substring(0, 500).replace(/\n/g, ' ').replace(/\s+/g, ' ');
+                log(`📄 HTML sample: ${sample}...`);
+              }
+            } else {
+              log(`❌ Raw HTML fetch failed or too short (${rawHTML?.length || 0} chars)`);
+            }
+          } catch (curlError) {
+            log(`❌ Raw HTML extraction via curl failed: ${curlError.message}`);
+            log(`❌ Error details: ${curlError.stack || curlError}`);
+            log(`❌ Error location: curl fallback execution in Node.js context`);
+          }
+        }
+        
+        // Display debug info
+        if (languageResults.debugInfo) {
+          const debug = languageResults.debugInfo;
+          log(`\n=== DEBUG INFO ===`);
+          log(`Document State: ${debug.documentState}`);
+          log(`Title: "${debug.title}"`);
+          log(`Meta Description: "${debug.metaDescription}"`);
+          log(`Body Text Length: ${debug.bodyTextLength} characters`);
+          log(`Visible Text Length: ${debug.visibleTextLength} characters`);
+          log(`Document Text Length: ${debug.documentTextLength} characters`);
+          log(`Best Text Length: ${debug.bestTextLength} characters (source: ${debug.bestTextSource})`);
+          log(`Full Text Length: ${debug.fullTextLength} characters`);
+          log(`Element Count: ${debug.elementCount}`);
+          log(`Text Sample: "${debug.textSample}"`);
+          if (debug.extractionMethods) {
+            log(`Extraction Methods:`);
+            log(`  Body innerText: ${debug.extractionMethods.bodyInnerText} chars`);
+            log(`  Body textContent: ${debug.extractionMethods.bodyTextContent} chars`);
+            log(`  Document innerText: ${debug.extractionMethods.documentInnerText} chars`);
+            log(`  Document textContent: ${debug.extractionMethods.documentTextContent} chars`);
+            log(`  Visible elements: ${debug.extractionMethods.visibleElements} elements`);
+            log(`  Visible text length: ${debug.extractionMethods.visibleTextLength} chars`);
+            log(`  Valid options: ${debug.extractionMethods.validOptionsCount}/${debug.extractionMethods.allOptionsCount}`);
+          }
+        }
+        
         log(`Primary Language: ${languageResults.primaryLanguage} (${languageResults.confidence} confidence)`);
         log(`Language Score: ${languageResults.score}`);
         log(`Declared Language: ${languageResults.declaredLanguage}`);
@@ -2466,13 +3564,18 @@ function extractDomain(url) {
           log(`Secondary Languages: ${secondaryLangs}`);
         }
         
-        if (languageResults.topLanguages && languageResults.topLanguages.length > 1) {
-          log(`\nTop Language Candidates:`);
-          languageResults.topLanguages.slice(0, 3).forEach((lang, index) => {
-            const ranking = ['🥇', '🥈', '🥉'][index] || '  ';
-            log(`  ${ranking} ${lang.language}: ${lang.score} (unicode: ${lang.breakdown.unicode}, words: ${lang.breakdown.words}, phrases: ${lang.breakdown.phrases})`);
-          });
-        }
+        // ── Final status and load time logging ──────────────────────────────────
+        const protocol = useProxy ? '(proxy)' : '(direct)';
+        networkLog(`${mainStatus} https://${targetUrl}, ${country.countryName || 'Unknown'} (${country.country || 'XX'}) ${protocol}`);
+        networkLog(`Load time: ${loadTime}s | Bytes: ${(totalBytes / 1024).toFixed(2)} KB`);
+        
+        // if (languageResults.topLanguages && languageResults.topLanguages.length > 1) {
+        //   log(`\nTop Language Candidates:`);
+        //   languageResults.topLanguages.slice(0, 3).forEach((lang, index) => {
+        //     const ranking = ['🥇', '🥈', '🥉'][index] || '  ';
+        //     log(`  ${ranking} ${lang.language}: ${lang.score} (unicode: ${lang.breakdown.unicode}, words: ${lang.breakdown.words}, phrases: ${lang.breakdown.phrases})`);
+        //   });
+        // }
       }
     } catch (langErr) {
       log(`Language detection failed: ${langErr.message}`);
@@ -2487,11 +3590,12 @@ function extractDomain(url) {
     }
 
     // ── CSV output ──────────────────────────────────────────────────────────
-    // Format: SNI, ip addr, ip country, main first status code, Primary Language, Declared Language, chrome_fail, total domains, not 200 domains, 403 responses, 451 responses, 500 responses, 503 responses, 403 domain names, 451 domain names, 500 domain names, 503 domain names, TCP return, cloudflare_challenge, total_opened_streams, total_redirects, total_data_amount, total_migrated_data_amount, migration_success_rate, load_time
-    const header = 'SNI,ip addr,ip country,main first status code,Primary Language,Declared Language,chrome_fail,total domains,not 200 domains,403 responses,451 responses,500 responses,503 responses,403 domain names,451 domain names,500 domain names,503 domain names,TCP return,cloudflare_challenge,total_opened_streams,total_redirects,total_data_amount,total_migrated_data_amount,migration_success_rate,load_time\n';
+    // Format: SNI, ip addr, ip country, main first status code, Primary Language, Declared Language, chrome_fail, total domains, not 200 domains, 403 responses, 451 responses, 500 responses, 503 responses, 403 domain names, 451 domain names, 500 domain names, 503 domain names, TCP return, cloudflare_challenge, total_opened_streams, total_redirects, total_data_amount, total_migrated_data_amount, total_stateless_resets, total_migration_disabled, migration_success_rate, migration_disabled_new_id_counts, migration_disabled_new_id_conflicts, PVstate_idle:probing:validated:failed:migrated, pv_probing_domains, pv_failed_domains, stateless_reset_domains, migrated_domains, connection_details, load_time
+    const header = 'SNI,ip addr,ip country,main first status code,Primary Language,Declared Language,chrome_fail,load_time,total domains,failed domains,not 200 domains,403 responses,451 responses,500 responses,503 responses,403 domain names,451 domain names,500 domain names,503 domain names,TCP return,cloudflare_challenge,total_opened_streams,total_data_amount,total_migrated_data_amount,migrated_data_rate,total_stateless_resets,total_disable_connection_migrations,new_connection_id_count,migration_disabled_new_id_conflicts,PVstate_idle:probing:validated:failed:migrated,pv_probing_domains,pv_failed_domains,stateless_reset_domains,migrated_domains,connection_details\n';
     
-    // Calculate domains with non-200 status codes and specific status code counts
+    // Calculate domains with non-200 status codes, failed domains, and specific status code counts
     const non200Domains = new Set();
+    const connectionFailedDomains = new Set();
     const statusCounts = {
       '403': 0,
       '451': 0,
@@ -2530,14 +3634,6 @@ function extractDomain(url) {
       }
     });
     
-    // Function to escape CSV fields that contain commas, quotes, or newlines
-    function escapeCsvField(field) {
-      if (field && (field.includes(',') || field.includes('"') || field.includes('\n'))) {
-        return `"${field.replace(/"/g, '""')}"`;
-      }
-      return field || '';
-    }
-    
     // Format domain names for CSV (semicolon separated)
     const format403DomainNames = statusDomainNames['403'].map(domain => `${domain}/`).join('; ');
     const format451DomainNames = statusDomainNames['451'].map(domain => `${domain}/`).join('; ');
@@ -2545,16 +3641,305 @@ function extractDomain(url) {
     const format503DomainNames = statusDomainNames['503'].map(domain => `${domain}/`).join('; ');
     
     // Format the row with the new format including chrome_fail and TCP return columns
-    // SNI, ip addr, ip country, main first status code, Primary Language, Declared Language, chrome_fail, total domains, not 200 domains, 403 responses, 451 responses, 500 responses, 503 responses, 403 domain names, 451 domain names, 500 domain names, 503 domain names, TCP return, cloudflare_challenge, total_opened_streams, total_redirects, total_data_amount, total_migrated_data_amount, migration_success_rate, load_time
     const tcpResult = finalResultFromTCP ? 'TCP' : 'QUIC';
     
+    // Extract comprehensive connection statistics for CSV
+    let totalDomainsForCsv = uniqueDomainsRequested; // Default to current count
+    let migrationDisabledCount = 0;
+    let newConnectionIdCount = 0;
+    let migrationDisabledNewIdConflicts = '';
+    let pvStateCounts = [0, 0, 0, 0, 0]; // idle, probing, validated, failed, migrated
+    let pvProbingDomains = [];
+    let pvFailedDomains = [];
+    let statelessResetDomains = [];
+    let migratedDomains = [];
+    let connectionDetails = '';
     
-    const row = `${escapeCsvField(targetUrl)},${escapeCsvField(country.ip || '')},${escapeCsvField(country.countryName || 'Unknown')},${mainStatus},${escapeCsvField(languageResults.primaryLanguage)},${escapeCsvField(languageResults.declaredLanguage)},-,${uniqueDomainsRequested},${non200Domains.size},${statusCounts['403']},${statusCounts['451']},${statusCounts['500']},${statusCounts['503']},"${format403DomainNames}","${format451DomainNames}","${format500DomainNames}","${format503DomainNames}",${tcpResult},${cloudflareDetected},${proxyStats.total_opened_streams},${proxyStats.total_redirects},${proxyStats.total_data_amount},${proxyStats.total_migrated_data_amount},${proxyStats.migration_success_rate},${loadTime}\n`;
+    // Determine if using proxy and extract detailed stats
+    const usingProxy = proxyStats && proxyStats.connections_detail;
+    
+    if (usingProxy) {
+      try {
+        const connections = parseConnectionsDetail(proxyStats.connections_detail);
+        totalDomainsForCsv = connections.length; // Use connection count from proxy
+        
+        // Process each connection for detailed statistics
+        connections.forEach(conn => {
+          const domainIp = `${conn.domain}:${conn.ip}`;
+          
+          // Count migration disabled and new connection IDs
+          if (conn.migrationDisabled) migrationDisabledCount++;
+          if (conn.newConnectionIdReceived) newConnectionIdCount++;
+          
+          // Check for conflicting disabled + new_id combinations
+          if (conn.migrationDisabled && conn.newConnectionIdReceived) {
+            if (migrationDisabledNewIdConflicts) migrationDisabledNewIdConflicts += '; ';
+            migrationDisabledNewIdConflicts += domainIp;
+          }
+          
+          // Count path validation states
+          const pvState = conn.pathValidationState || 'idle';
+          switch (pvState) {
+            case 'idle': pvStateCounts[0]++; break;
+            case 'probing': 
+              pvStateCounts[1]++; 
+              pvProbingDomains.push(domainIp);
+              break;
+            case 'validated': pvStateCounts[2]++; break;
+            case 'failed': 
+              pvStateCounts[3]++; 
+              pvFailedDomains.push(domainIp);
+              break;
+            case 'migrated': pvStateCounts[4]++; break;
+            default: pvStateCounts[0]++; // Unknown counts as idle
+          }
+          
+          // Track stateless resets
+          if (conn.statelessReset) {
+            statelessResetDomains.push(domainIp);
+          }
+          
+          // Track migrated domains with data amounts
+          if (conn.migratedPath > 0) {
+            migratedDomains.push(`${domainIp}(${conn.totalData}:${conn.migratedPath})`);
+          }
+        });
+        
+        // Create comprehensive connection details string
+        connectionDetails = proxyStats.connections_detail.replace(/[\r\n]+/g, ' ').trim();
+        
+      } catch (err) {
+        // Keep defaults if parsing fails
+        networkLog(`[WARNING] Failed to parse connection details for CSV: ${err.message}`);
+      }
+    }
+    
+    // Helper function to format timing values for CSV
+    const formatTimingForCsv = (value) => {
+      if (value === null || value === undefined) return '-';
+      return value.toFixed(2);
+    };
+    
+    // Format timing data for CSV (use '-' if not available)
+    const timingData = detailedTimings ? [
+      formatTimingForCsv(detailedTimings.dnsLookupTime),
+      formatTimingForCsv(detailedTimings.tcpConnectTime), 
+      formatTimingForCsv(detailedTimings.tlsTime),
+      formatTimingForCsv(detailedTimings.requestTime),
+      formatTimingForCsv(detailedTimings.responseTime),
+      formatTimingForCsv(detailedTimings.domProcessingTime),
+      formatTimingForCsv(detailedTimings.resourceLoadingTime),
+      formatTimingForCsv(detailedTimings.totalNetworkTime)
+    ] : ['-', '-', '-', '-', '-', '-', '-', '-'];
+    
+    const paintData = paintTimings ? [
+      formatTimingForCsv(paintTimings.firstPaint),
+      formatTimingForCsv(paintTimings.firstContentfulPaint)
+    ] : ['-', '-'];
+    
+    // Format proxy-specific fields or use defaults for non-proxy mode
+    const proxyFields = usingProxy ? {
+      newConnectionIdCount: newConnectionIdCount,
+      migrationDisabledNewIdConflicts: migrationDisabledNewIdConflicts || '-',
+      pvStateCounts: pvStateCounts.join(':'),
+      pvProbingDomains: pvProbingDomains.join('; ') || '-',
+      pvFailedDomains: pvFailedDomains.join('; ') || '-',
+      statelessResetDomains: statelessResetDomains.join('; ') || '-',
+      migratedDomains: migratedDomains.join('; ') || '-',
+      connectionDetails: escapeCsvField(connectionDetails),
+      totalOpenedStreams: proxyStats.total_opened_streams || 0,
+      totalDataAmount: proxyStats.total_data_amount || 0,
+      totalMigratedDataAmount: proxyStats.total_migrated_data_amount || 0,
+      totalStatelessResets: proxyStats.total_stateless_resets || 0,
+      totalMigrationDisabled: proxyStats.total_migration_disabled || 0,
+      migrationSuccessRate: proxyStats.migration_success_rate || '0.0%'
+    } : {
+      newConnectionIdCount: '-',
+      migrationDisabledNewIdConflicts: '-',
+      pvStateCounts: '-',
+      pvProbingDomains: '-',
+      pvFailedDomains: '-',
+      statelessResetDomains: '-',
+      migratedDomains: '-',
+      connectionDetails: '-',
+      totalOpenedStreams: '-',
+      totalDataAmount: '-',
+      totalMigratedDataAmount: '-',
+      totalStatelessResets: '-',
+      totalMigrationDisabled: '-',
+      migrationSuccessRate: '-'
+    };
+    
+    const row = `${escapeCsvField(targetUrl)},${escapeCsvField(country.ip || '')},${escapeCsvField(country.countryName || 'Unknown')},${mainStatus},${escapeCsvField(languageResults.primaryLanguage)},${escapeCsvField(languageResults.declaredLanguage)},-,${loadTime},${totalDomainsForCsv},${connectionFailedDomains.size},${non200Domains.size},${statusCounts['403']},${statusCounts['451']},${statusCounts['500']},${statusCounts['503']},"${format403DomainNames}","${format451DomainNames}","${format500DomainNames}","${format503DomainNames}",${tcpResult},${cloudflareDetected},${proxyFields.totalOpenedStreams},${proxyFields.totalDataAmount},${proxyFields.totalMigratedDataAmount},${proxyFields.migrationSuccessRate},${proxyFields.totalStatelessResets},${proxyFields.totalMigrationDisabled},${proxyFields.newConnectionIdCount},${proxyFields.migrationDisabledNewIdConflicts},${proxyFields.pvStateCounts},${proxyFields.pvProbingDomains},${proxyFields.pvFailedDomains},${proxyFields.statelessResetDomains},${proxyFields.migratedDomains},${proxyFields.connectionDetails}\n`;
 
     if (!fs.existsSync(csvPath)) fs.writeFileSync(csvPath, header);
     fs.appendFileSync(csvPath, row);
 
   } catch (err) {
+    // ═══ HANDLE NAVIGATING_FRAME_WAS_DETACHED AS NORMAL CASE ═══
+    if (err.message.includes('NAVIGATING_FRAME_WAS_DETACHED')) {
+      log(`⚠️  Frame detachment after redirect (normal): ${err.message}`);
+      log(`✅ Network connectivity successful, treating as normal case`);
+      
+      // For frame detachment, we have all the network data already collected
+      // Just use current values and continue with normal CSV output
+      
+      // Ensure we have basic values for successful case processing
+      // For frame detachment, prioritize first main document status (usually 301 redirect)
+      if (mainStatus === null) {
+        mainStatus = firstMainDocumentStatus || highestPriorityStatus || 301;
+      }
+      
+      let country = { ip: 'ERROR', countryName: 'Unknown', country: 'Unknown' };
+      try {
+        country = await getCountryFromDNS(targetUrl);
+      } catch (countryErr) {
+        log(`Warning: Country detection failed: ${countryErr.message}`);
+      }
+      
+      // Get proxy stats if available
+      let proxyStats = { total_opened_streams: 0, total_redirects: 0, total_data_amount: 0, total_migrated_data_amount: 0, total_stateless_resets: 0, total_migration_disabled: 0, migration_success_rate: '0%', dns_fallback_occurred: false, connections_detail: '' };
+      if (useProxy) {
+        try {
+          const fetchedStats = await fetchProxyStats();
+          if (fetchedStats) {
+            proxyStats = fetchedStats;
+            
+            // Try to get real IP from proxy connections for frame detachment case
+            if (proxyStats.connections_detail) {
+              const realIPInfo = extractRealIPFromProxy(targetUrl, proxyStats);
+              if (realIPInfo) {
+                log(`🌍 [FRAME-DETACH] Using proxy connection IP: ${realIPInfo.ip} instead of DNS IP: ${country.ip}`);
+                country = {
+                  ip: realIPInfo.ip,
+                  country: country.country, // Keep original country info
+                  countryName: country.countryName // Keep original country info
+                };
+              }
+            }
+          }
+        } catch (proxyErr) {
+          log(`Warning: Proxy stats failed: ${proxyErr.message}`);
+        }
+      }
+      
+      // Basic language results for frame detachment case
+      const languageResults = {
+        primaryLanguage: 'Error',
+        declaredLanguage: 'unknown'
+      };
+      
+      // Calculate basic statistics
+      const uniqueDomainsRequested = new Set(requestedResources.map(r => r.domain)).size;
+      const tcpResult = finalResultFromTCP ? 'TCP' : 'QUIC';
+      
+      // Use standard successful case CSV format (no chrome_fail)
+      const header = 'SNI,ip addr,ip country,main first status code,Primary Language,Declared Language,chrome_fail,load_time,total domains,failed domains,not 200 domains,403 responses,451 responses,500 responses,503 responses,403 domain names,451 domain names,500 domain names,503 domain names,TCP return,cloudflare_challenge,total_opened_streams,total_data_amount,total_migrated_data_amount,migrated_data_rate,total_stateless_resets,total_disable_connection_migrations,new_connection_id_count,migration_disabled_new_id_conflicts,PVstate_idle:probing:validated:failed:migrated,pv_probing_domains,pv_failed_domains,stateless_reset_domains,migrated_domains,connection_details\n';
+      
+      // Calculate more detailed statistics for frame detachment case
+      const connectionFailedDomains = new Set();
+      const non200Domains = new Set();
+      const statusCounts = { '403': 0, '451': 0, '500': 0, '503': 0 };
+      
+      // Analyze any collected geo-blocked resources
+      geoBlockedResources.forEach(resource => {
+        if (resource.status !== 200) {
+          const isMainDomain = (resource.domain === targetUrl || 
+                              resource.domain === `www.${targetUrl}` || 
+                              `www.${resource.domain}` === targetUrl);
+          
+          if (!isMainDomain) {
+            non200Domains.add(resource.domain);
+            const statusStr = resource.status.toString();
+            if (statusCounts.hasOwnProperty(statusStr)) {
+              statusCounts[statusStr]++;
+            }
+          }
+        }
+      });
+      
+      // Extract comprehensive connection statistics for frame detachment case
+      let migrationStats = '-';
+      let newConnectionIdCount = '-';
+      let migrationDisabledNewIdConflicts = '-';
+      let pvStateCounts = '-';
+      let pvProbingDomains = '-';
+      let pvFailedDomains = '-';
+      let statelessResetDomains = '-';
+      let migratedDomains = '-';
+      
+      if (proxyStats.connections_detail) {
+        try {
+          const connections = parseConnectionsDetail(proxyStats.connections_detail);
+          
+          // Calculate migration statistics
+          let migrationDisabledCount = 0;
+          let newIdCount = 0;
+          let pvCounts = [0, 0, 0, 0, 0]; // idle, probing, validated, failed, migrated
+          let probingDomains = [];
+          let failedDomains = [];
+          let resetDomains = [];
+          let migratedList = [];
+          let conflicts = [];
+          
+          connections.forEach(conn => {
+            const domainIp = `${conn.domain}:${conn.ip}`;
+            
+            if (conn.migrationDisabled) migrationDisabledCount++;
+            if (conn.newConnectionIdReceived) newIdCount++;
+            
+            if (conn.migrationDisabled && conn.newConnectionIdReceived) {
+              conflicts.push(domainIp);
+            }
+            
+            const pvState = conn.pathValidationState || 'idle';
+            switch (pvState) {
+              case 'idle': pvCounts[0]++; break;
+              case 'probing': pvCounts[1]++; probingDomains.push(domainIp); break;
+              case 'validated': pvCounts[2]++; break;
+              case 'failed': pvCounts[3]++; failedDomains.push(domainIp); break;
+              case 'migrated': pvCounts[4]++; break;
+              default: pvCounts[0]++;
+            }
+            
+            if (conn.statelessReset) {
+              resetDomains.push(domainIp);
+            }
+            
+            if (conn.migratedPath > 0) {
+              migratedList.push(`${domainIp}(${conn.totalData}:${conn.migratedPath})`);
+            }
+          });
+          
+          newConnectionIdCount = newIdCount;
+          migrationDisabledNewIdConflicts = conflicts.join('; ') || '-';
+          pvStateCounts = pvCounts.join(':');
+          pvProbingDomains = probingDomains.join('; ') || '-';
+          pvFailedDomains = failedDomains.join('; ') || '-';
+          statelessResetDomains = resetDomains.join('; ') || '-';
+          migratedDomains = migratedList.join('; ') || '-';
+          
+        } catch (parseErr) {
+          log(`Warning: Connection parsing failed: ${parseErr.message}`);
+        }
+      }
+      
+      // Build CSV row as normal successful case (chrome_fail = '-' instead of error)
+      const connectionDetails = proxyStats.connections_detail ? escapeCsvField(proxyStats.connections_detail.replace(/[\r\n]+/g, ' ').trim()) : '-';
+      const row = `${targetUrl},${country.ip || 'ERROR'},${country.countryName || 'Unknown'},${mainStatus || '-'},${languageResults.primaryLanguage},${languageResults.declaredLanguage},-,-,${uniqueDomainsRequested},${connectionFailedDomains.size},${non200Domains.size},${statusCounts['403']},${statusCounts['451']},${statusCounts['500']},${statusCounts['503']},"","","","",${tcpResult},No,${proxyStats.total_opened_streams || '-'},${proxyStats.total_data_amount || '-'},${proxyStats.total_migrated_data_amount || '-'},${proxyStats.migration_success_rate || '-'},${proxyStats.total_stateless_resets || '-'},${proxyStats.total_migration_disabled || '-'},${newConnectionIdCount},${migrationDisabledNewIdConflicts},${pvStateCounts},${pvProbingDomains},${pvFailedDomains},${statelessResetDomains},${migratedDomains},${connectionDetails}\n`;
+      
+      // Write as normal successful case
+      if (!fs.existsSync(csvPath)) fs.writeFileSync(csvPath, header);
+      fs.appendFileSync(csvPath, row);
+      
+      // Exit normally (no error reported)
+      await browser.close();
+      return;
+    }
+    
+    // Handle other errors as before
+    error(`Failed: ${err.message}`);
+    
     // ═══ CLOUDFLARE CHALLENGE DETECTION IN ERRORS ═══
     let cloudflareChallenge = '';
     let cloudflareDetected = 'No';
@@ -2566,12 +3951,39 @@ function extractDomain(url) {
     if (challengeResources.length > 0) {
       cloudflareChallenge = ' [CLOUDFLARE CHALLENGE DETECTED]';
       cloudflareDetected = 'Yes';
+      error(`Additional info: ${cloudflareChallenge}`);
     } else if (challengeFailures.length > 0) {
       cloudflareChallenge = ' [CLOUDFLARE CHALLENGE IN FAILURES]';
       cloudflareDetected = 'Yes';
+      error(`Additional info: ${cloudflareChallenge}`);
     }
     
-    error(`Failed: ${err.message}${cloudflareChallenge}`);
+    // ── Fetch proxy statistics even on connection failure ─────────────────────
+    let proxyStats = { total_opened_streams: 0, total_redirects: 0, total_data_amount: 0, total_migrated_data_amount: 0, total_stateless_resets: 0, total_migration_disabled: 0, migration_success_rate: '0%', dns_fallback_occurred: false, connections_detail: '' };
+    if (useProxy) {
+      try {
+        networkLog('Fetching proxy statistics after connection failure...');
+        const fetchedStats = await fetchProxyStats();
+        if (fetchedStats) {
+          proxyStats = fetchedStats;
+          networkLog(`Proxy stats after failure: ${proxyStats.total_opened_streams} streams, ${proxyStats.total_redirects} redirects, ${proxyStats.total_data_amount} bytes total`);
+          
+          // Try to get real IP even on failure
+          if (proxyStats.connections_detail) {
+            const realIPInfo = extractRealIPFromProxy(targetUrl, proxyStats);
+            if (realIPInfo) {
+              networkLog(`🌍 [REAL-IP-ERROR] Found connection IP despite failure: ${realIPInfo.ip} (${realIPInfo.domain})`);
+              // Store real IP info for CSV generation
+              global.errorCaseRealIP = realIPInfo;
+            }
+          }
+        } else {
+          networkLog(`[WARNING] No proxy statistics found after connection failure.`);
+        }
+      } catch (proxyErr) {
+        networkLog(`[WARNING] Failed to fetch proxy statistics after connection failure: ${proxyErr.message}`);
+      }
+    }
     
     // If it's a navigation timeout, show pending resources
     if (err.message.includes('Navigation timeout') || err.message.includes('timeout')) {
@@ -2619,11 +4031,15 @@ function extractDomain(url) {
         mainErrorForCsv = `${targetUrl}(NAVIGATION_TIMEOUT)`;
       } else {
         // For other errors, try to extract meaningful error info
-        const cleanError = err.message.split('\n')[0].replace(/[^A-Z0-9_]/g, '_').toUpperCase();
+        const cleanError = err.message.split('\n')[0]
+          .replace(/[^a-zA-Z0-9\s]/g, '') // Remove special chars but keep spaces
+          .replace(/\s+/g, '_')            // Replace spaces with underscores
+          .toUpperCase()
+          .substring(0, 30) || 'UNKNOWN_ERROR'; // Limit length and provide fallback
         mainErrorForCsv = `${targetUrl}(${cleanError})`;
       }
       
-      const header = 'SNI,ip addr,ip country,main first status code,Primary Language,Declared Language,chrome_fail,total domains,not 200 domains,403 responses,451 responses,500 responses,503 responses,403 domain names,451 domain names,500 domain names,503 domain names,TCP return,cloudflare_challenge\n';
+      const header = 'SNI,ip addr,ip country,main first status code,Primary Language,Declared Language,chrome_fail,load_time,total domains,failed domains,not 200 domains,403 responses,451 responses,500 responses,503 responses,403 domain names,451 domain names,500 domain names,503 domain names,TCP return,cloudflare_challenge,total_opened_streams,total_data_amount,total_migrated_data_amount,migrated_data_rate,total_stateless_resets,total_disable_connection_migrations,new_connection_id_count,migration_disabled_new_id_conflicts,PVstate_idle:probing:validated:failed:migrated,pv_probing_domains,pv_failed_domains,stateless_reset_domains,migrated_domains,connection_details\n';
       
       // Extract clean Chromium error for chrome_fail field
       let chromeErrorForCsv = '';
@@ -2637,25 +4053,176 @@ function extractDomain(url) {
         chromeErrorForCsv = 'NAVIGATION_TIMEOUT';
       } else {
         // For other errors, clean up the message
-        chromeErrorForCsv = err.message.split('\n')[0].replace(/[^A-Z0-9_]/g, '_').toUpperCase();
+        chromeErrorForCsv = err.message.split('\n')[0]
+          .replace(/[^a-zA-Z0-9\s]/g, '') // Remove special chars but keep spaces
+          .replace(/\s+/g, '_')            // Replace spaces with underscores
+          .toUpperCase()
+          .substring(0, 30) || 'UNKNOWN_ERROR'; // Limit length and provide fallback
       }
       
       // Status code logic: Use first main document status if available, then highest priority status, otherwise use "-"
       const statusForCsv = firstMainDocumentStatus || highestPriorityStatus || '-';
-      const ipForCsv = (firstMainDocumentStatus || highestPriorityStatus) ? 'BLOCKED' : 'ERROR';
-      const countryForCsv = 'Unknown';
+      
+      // Try to use extracted real IP from proxy connection details, fallback to ERROR
+      let ipForCsv = 'ERROR';
+      let countryForCsv = 'Unknown';
+      
+      if (global.errorCaseRealIP) {
+        ipForCsv = global.errorCaseRealIP.ip;
+        // Get country information for the real IP using the same service as getCountryFromDNS
+        try {
+          const response = await fetch(`https://ipwho.is/${global.errorCaseRealIP.ip}`);
+          const geo = await response.json();
+          if (geo && geo.success && geo.country) {
+            countryForCsv = geo.country;
+          }
+        } catch (countryErr) {
+          networkLog(`[WARNING] Failed to get country for error case IP ${global.errorCaseRealIP.ip}: ${countryErr.message}`);
+        }
+        // Clean up global variable
+        delete global.errorCaseRealIP;
+      } else if (firstMainDocumentStatus || highestPriorityStatus) {
+        ipForCsv = 'BLOCKED';
+      }
       
       log(`📊 Error case - First main status: ${firstMainDocumentStatus || 'None'}, Priority status: ${highestPriorityStatus || 'None'}, Chrome error: ${chromeErrorForCsv}`);
       log(`📊 CSV format - Status: ${statusForCsv}, Chrome fail: ${chromeErrorForCsv}`);
       
       const tcpResult = finalResultFromTCP ? 'TCP' : 'QUIC';
-      const row = `${targetUrl},${ipForCsv},${countryForCsv},${statusForCsv},Error,unknown,${chromeErrorForCsv},-,-,-,-,-,-,"","","","",${tcpResult},${cloudflareDetected}\n`;
+      
+      // Extract comprehensive connection statistics for error case CSV
+      let totalDomainsForErrorCsv = 1; // Default for error case
+      let failedDomainsForErrorCsv = 1; // Default for error case (connection failed)
+      let migrationDisabledCount = 0;
+      let newConnectionIdCount = 0;
+      let migrationDisabledNewIdConflicts = '';
+      let pvStateCounts = [0, 0, 0, 0, 0]; // idle, probing, validated, failed, migrated
+      let pvProbingDomains = [];
+      let pvFailedDomains = [];
+      let statelessResetDomains = [];
+      let migratedDomains = [];
+      let connectionDetails = '';
+      
+      // Determine if using proxy and extract detailed stats for error case
+      const usingProxyError = proxyStats && proxyStats.connections_detail;
+      
+      if (usingProxyError) {
+        try {
+          const connections = parseConnectionsDetail(proxyStats.connections_detail);
+          totalDomainsForErrorCsv = connections.length; // Use connection count from proxy
+          
+          // Count failed connections - for error cases, count connections with handshake failures
+          // Since we're in an error case, the main document failed, so count as 1 failed domain
+          failedDomainsForErrorCsv = 1; // Always 1 for complete connection failures
+          
+          // Process each connection for detailed statistics (same logic as success case)
+          connections.forEach(conn => {
+            const domainIp = `${conn.domain}:${conn.ip}`;
+            
+            if (conn.migrationDisabled) migrationDisabledCount++;
+            if (conn.newConnectionIdReceived) newConnectionIdCount++;
+            
+            if (conn.migrationDisabled && conn.newConnectionIdReceived) {
+              if (migrationDisabledNewIdConflicts) migrationDisabledNewIdConflicts += '; ';
+              migrationDisabledNewIdConflicts += domainIp;
+            }
+            
+            const pvState = conn.pathValidationState || 'idle';
+            switch (pvState) {
+              case 'idle': pvStateCounts[0]++; break;
+              case 'probing': 
+                pvStateCounts[1]++; 
+                pvProbingDomains.push(domainIp);
+                break;
+              case 'validated': pvStateCounts[2]++; break;
+              case 'failed': 
+                pvStateCounts[3]++; 
+                pvFailedDomains.push(domainIp);
+                break;
+              case 'migrated': pvStateCounts[4]++; break;
+              default: pvStateCounts[0]++; // Unknown counts as idle
+            }
+            
+            if (conn.statelessReset) {
+              statelessResetDomains.push(domainIp);
+            }
+            
+            if (conn.migratedPath > 0) {
+              migratedDomains.push(`${domainIp}(${conn.totalData}:${conn.migratedPath})`);
+            }
+          });
+          
+          connectionDetails = proxyStats.connections_detail.replace(/[\r\n]+/g, ' ').trim();
+          
+        } catch (err) {
+          networkLog(`[WARNING] Failed to parse connection details for error CSV: ${err.message}`);
+        }
+      }
+      
+      // Format proxy-specific fields for error case or use defaults for non-proxy mode
+      let proxyFieldsError;
+      try {
+        proxyFieldsError = usingProxyError ? {
+          newConnectionIdCount: newConnectionIdCount,
+          migrationDisabledNewIdConflicts: migrationDisabledNewIdConflicts || '-',
+          pvStateCounts: pvStateCounts.join(':'),
+          pvProbingDomains: pvProbingDomains.join('; ') || '-',
+          pvFailedDomains: pvFailedDomains.join('; ') || '-',
+          statelessResetDomains: statelessResetDomains.join('; ') || '-',
+          migratedDomains: migratedDomains.join('; ') || '-',
+          connectionDetails: escapeCsvField(connectionDetails),
+          totalOpenedStreams: proxyStats.total_opened_streams || 0,
+          totalDataAmount: proxyStats.total_data_amount || 0,
+          totalMigratedDataAmount: proxyStats.total_migrated_data_amount || 0,
+          totalStatelessResets: proxyStats.total_stateless_resets || 0,
+          totalMigrationDisabled: proxyStats.total_migration_disabled || 0,
+          migrationSuccessRate: proxyStats.migration_success_rate || '0.0%'
+        } : {
+        newConnectionIdCount: '-',
+        migrationDisabledNewIdConflicts: '-',
+        pvStateCounts: '-',
+        pvProbingDomains: '-',
+        pvFailedDomains: '-',
+        statelessResetDomains: '-',
+        migratedDomains: '-',
+        connectionDetails: '-',
+        totalOpenedStreams: '-',
+        totalDataAmount: '-',
+        totalMigratedDataAmount: '-',
+        totalStatelessResets: '-',
+        totalMigrationDisabled: '-',
+        migrationSuccessRate: '-'
+        };
+      } catch (proxyFieldsErr) {
+        networkLog(`[WARNING] Error creating proxyFieldsError: ${proxyFieldsErr.message}`);
+        // Fallback to default values
+        proxyFieldsError = {
+          newConnectionIdCount: '-',
+          migrationDisabledNewIdConflicts: '-',
+          pvStateCounts: '-',
+          pvProbingDomains: '-',
+          pvFailedDomains: '-',
+          statelessResetDomains: '-',
+          migratedDomains: '-',
+          connectionDetails: '-',
+          totalOpenedStreams: '-',
+          totalDataAmount: '-',
+          totalMigratedDataAmount: '-',
+          totalStatelessResets: '-',
+          totalMigrationDisabled: '-',
+          migrationSuccessRate: '-'
+        };
+      }
+      
+      // Include proxy stats in the error CSV row with new format
+      const row = `${targetUrl},${ipForCsv},${countryForCsv},${statusForCsv},Error,unknown,${chromeErrorForCsv},-,${totalDomainsForErrorCsv},${failedDomainsForErrorCsv},-,-,-,-,-,"","","","",${tcpResult},${cloudflareDetected},${proxyFieldsError.totalOpenedStreams},${proxyFieldsError.totalDataAmount},${proxyFieldsError.totalMigratedDataAmount},${proxyFieldsError.migrationSuccessRate},${proxyFieldsError.totalStatelessResets},${proxyFieldsError.totalMigrationDisabled},${proxyFieldsError.newConnectionIdCount},${proxyFieldsError.migrationDisabledNewIdConflicts},${proxyFieldsError.pvStateCounts},${proxyFieldsError.pvProbingDomains},${proxyFieldsError.pvFailedDomains},${proxyFieldsError.statelessResetDomains},${proxyFieldsError.migratedDomains},${proxyFieldsError.connectionDetails}\n`;
 
       if (!fs.existsSync(csvPath)) fs.writeFileSync(csvPath, header);
       fs.appendFileSync(csvPath, row);
     } catch (csvErr) {
       error('Failed to write CSV:', csvErr.message);
     }
+
   } finally {
     await browser.close();
   }
