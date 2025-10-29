@@ -12,29 +12,38 @@ echo "=================================="
 install_nodejs_via_nvm() {
     echo " Installing Node.js via nvm..."
     
-    # Check if curl is available
-    if ! command -v curl &> /dev/null; then
-        echo " Error: curl is not installed. Installing curl..."
+    # Check if we're running as root, which can cause issues with nvm
+    if [ "$EUID" -eq 0 ]; then
+        echo " Warning: Running as root. nvm installation will be for root user."
+        echo " You may want to run this script as a regular user instead."
+        echo ""
+    fi
+    
+    # Check if wget is available, install if needed
+    if ! command -v wget &> /dev/null; then
+        echo " Installing wget..."
         if command -v apt-get &> /dev/null; then
-            sudo apt-get update && sudo apt-get install -y curl
+            apt-get update && apt-get install -y wget
         elif command -v yum &> /dev/null; then
-            sudo yum install -y curl
+            yum install -y wget
         else
-            echo " Please install curl manually and run this script again."
+            echo " Please install wget manually and run this script again."
             exit 1
         fi
     fi
     
-    # Download nvm installation script to a temporary file
+    # Download nvm installation script using wget
     echo " Downloading nvm installation script..."
     TMP_FILE=$(mktemp)
-    if curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh -o "$TMP_FILE"; then
+    
+    if wget -q -O "$TMP_FILE" https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh; then
         echo " Running nvm installation..."
         bash "$TMP_FILE"
         rm -f "$TMP_FILE"
     else
         echo " Failed to download nvm installation script."
         echo " Please install Node.js manually from https://nodejs.org/"
+        rm -f "$TMP_FILE"
         exit 1
     fi
     
@@ -156,6 +165,8 @@ install_chrome_dependencies() {
         echo " Installing Chrome dependencies via apt-get..."
         sudo apt-get update -qq
         sudo apt-get install -y -qq \
+            wget \
+            unzip \
             libnss3 \
             libatk-bridge2.0-0 \
             libdrm2 \
@@ -174,6 +185,8 @@ install_chrome_dependencies() {
     elif command -v yum &> /dev/null; then
         echo " Installing Chrome dependencies via yum..."
         sudo yum install -y -q \
+            wget \
+            unzip \
             nss \
             atk \
             at-spi2-atk \
@@ -192,6 +205,8 @@ install_chrome_dependencies() {
     elif command -v dnf &> /dev/null; then
         echo " Installing Chrome dependencies via dnf..."
         sudo dnf install -y -q \
+            wget \
+            unzip \
             nss \
             atk \
             at-spi2-atk \
@@ -232,26 +247,11 @@ if [[ -f "$CHROME_BINARY" ]]; then
 else
     echo " Downloading Chrome Headless Shell v$CHROME_VERSION..."
     
-    # Check if wget or curl is available
-    if command -v wget &> /dev/null; then
-        DOWNLOAD_CMD="wget -q --show-progress"
-    elif command -v curl &> /dev/null; then
-        DOWNLOAD_CMD="curl -L -o chrome-headless-shell-linux64.zip"
-    else
-        echo " Neither wget nor curl is available for downloading Chrome."
-        echo "Please install wget or curl and try again."
-        exit 1
-    fi
-    
     # Create chromium directory
     mkdir -p "$CHROME_DIR"
     
-    # Download Chrome Headless Shell
-    if command -v wget &> /dev/null; then
-        wget -q --show-progress -O chrome-headless-shell-linux64.zip "$CHROME_URL"
-    else
-        curl -L -o chrome-headless-shell-linux64.zip "$CHROME_URL"
-    fi
+    # Download Chrome Headless Shell using wget
+    wget -q --show-progress -O chrome-headless-shell-linux64.zip "$CHROME_URL"
     
     # Check if download was successful
     if [[ ! -f "chrome-headless-shell-linux64.zip" ]]; then
