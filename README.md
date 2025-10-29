@@ -29,6 +29,12 @@ A powerful web scanner tool using Puppeteer to analyze webpage resources, domain
    ./install.sh
    ```
 
+   **If the main installation script fails, try the simple installer:**
+   ```bash
+   chmod +x simple-install.sh
+   ./simple-install.sh
+   ```
+
    The installation script will:
    - Check for Node.js installation (offers to install via nvm if missing)
    - Install all required dependencies
@@ -38,11 +44,17 @@ A powerful web scanner tool using Puppeteer to analyze webpage resources, domain
 
 ### Prerequisites
 
-**Recommended Node.js Installation (via nvm):**
+**Option 1: Use the install script (Recommended):**
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+**Option 2: Manual Node.js Installation via nvm:**
 
 ```bash
 # Install nvm (Node Version Manager)
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.4/install.sh | bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 
 # Restart your terminal or source the profile
 source ~/.bashrc  # or ~/.zshrc
@@ -50,6 +62,24 @@ source ~/.bashrc  # or ~/.zshrc
 # Install latest LTS Node.js
 nvm install --lts
 nvm use --lts
+
+# Then install dependencies
+npm install
+```
+
+**Option 3: System Package Manager:**
+
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install nodejs npm
+
+# CentOS/RHEL/Fedora
+sudo dnf install nodejs npm
+# or for older versions: sudo yum install nodejs npm
+
+# Then install dependencies
+npm install
 ```
 
 **System Dependencies:**
@@ -156,12 +186,45 @@ The codebase is organized into a modular architecture:
 
 ## Troubleshooting
 
+### Installation Issues
+
+**Install Script Fails:**
+If `./install.sh` fails, try manual installation:
+
+```bash
+# Method 1: Manual nvm installation
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh -o install-nvm.sh
+bash install-nvm.sh
+source ~/.bashrc
+nvm install --lts
+nvm use --lts
+npm install
+
+# Method 2: System package manager
+# Ubuntu/Debian:
+sudo apt update && sudo apt install nodejs npm
+npm install
+
+# Method 3: Direct Node.js download
+# Visit https://nodejs.org/ and download the installer
+```
+
+**nvm Installation Fails:**
+```bash
+# Ensure curl is installed
+sudo apt install curl  # Ubuntu/Debian
+sudo dnf install curl  # Fedora/RHEL
+
+# Try alternative nvm installation
+wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+```
+
 ### Node.js Issues
 
 **Node.js Not Found:**
 ```bash
 # Install via nvm (recommended)
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.4/install.sh | bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 source ~/.bashrc
 nvm install --lts
 nvm use --lts

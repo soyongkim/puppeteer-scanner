@@ -12,15 +12,46 @@ echo "=================================="
 install_nodejs_via_nvm() {
     echo " Installing Node.js via nvm..."
     
-    # Download and install nvm
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.4/install.sh | bash
+    # Check if curl is available
+    if ! command -v curl &> /dev/null; then
+        echo " Error: curl is not installed. Installing curl..."
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y curl
+        elif command -v yum &> /dev/null; then
+            sudo yum install -y curl
+        else
+            echo " Please install curl manually and run this script again."
+            exit 1
+        fi
+    fi
     
-    # Source nvm
+    # Download nvm installation script to a temporary file
+    echo " Downloading nvm installation script..."
+    TMP_FILE=$(mktemp)
+    if curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh -o "$TMP_FILE"; then
+        echo " Running nvm installation..."
+        bash "$TMP_FILE"
+        rm -f "$TMP_FILE"
+    else
+        echo " Failed to download nvm installation script."
+        echo " Please install Node.js manually from https://nodejs.org/"
+        exit 1
+    fi
+    
+    # Source nvm for current session
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
     
+    # Verify nvm installation
+    if ! command -v nvm &> /dev/null; then
+        echo " nvm installation failed. Please install Node.js manually."
+        echo " Visit: https://nodejs.org/ or https://github.com/nvm-sh/nvm"
+        exit 1
+    fi
+    
     # Install latest LTS Node.js
+    echo " Installing latest LTS Node.js..."
     nvm install --lts
     nvm use --lts
     
