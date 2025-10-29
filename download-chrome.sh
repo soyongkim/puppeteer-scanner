@@ -5,7 +5,7 @@
 
 set -e
 
-echo "🚀 Manual Chrome Headless Shell Download"
+echo " Manual Chrome Headless Shell Download"
 echo "========================================"
 
 CHROME_VERSION="140.0.7339.82"
@@ -15,25 +15,25 @@ CHROME_BINARY="$CHROME_DIR/chrome-headless-shell-linux64/chrome-headless-shell"
 
 # Check if already exists
 if [[ -f "$CHROME_BINARY" ]]; then
-    echo "✅ Chrome Headless Shell already exists at: $CHROME_BINARY"
-    echo "🧪 Testing binary..."
+    echo " Chrome Headless Shell already exists at: $CHROME_BINARY"
+    echo " Testing binary..."
     if "$CHROME_BINARY" --version > /dev/null 2>&1; then
-        echo "✅ Chrome Headless Shell is working correctly"
+        echo " Chrome Headless Shell is working correctly"
         VERSION=$("$CHROME_BINARY" --version)
         echo "   Version: $VERSION"
     else
-        echo "❌ Chrome binary exists but is not working"
+        echo " Chrome binary exists but is not working"
         echo "   Try installing system dependencies:"
         echo "   sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1"
     fi
     exit 0
 fi
 
-echo "📥 Downloading Chrome Headless Shell v$CHROME_VERSION..."
+echo " Downloading Chrome Headless Shell v$CHROME_VERSION..."
 
 # Check for download tools
 if ! command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
-    echo "❌ Neither wget nor curl is available"
+    echo " Neither wget nor curl is available"
     echo "Please install one of them:"
     echo "  Ubuntu/Debian: sudo apt-get install wget"
     echo "  CentOS/RHEL: sudo yum install wget"
@@ -42,7 +42,7 @@ fi
 
 # Check for unzip
 if ! command -v unzip &> /dev/null; then
-    echo "❌ unzip is not available"
+    echo " unzip is not available"
     echo "Please install it:"
     echo "  Ubuntu/Debian: sudo apt-get install unzip"
     echo "  CentOS/RHEL: sudo yum install unzip"
@@ -53,7 +53,7 @@ fi
 mkdir -p "$CHROME_DIR"
 
 # Download
-echo "🌐 Downloading from: $CHROME_URL"
+echo " Downloading from: $CHROME_URL"
 if command -v wget &> /dev/null; then
     wget -q --show-progress -O chrome-headless-shell-linux64.zip "$CHROME_URL"
 else
@@ -62,16 +62,16 @@ fi
 
 # Verify download
 if [[ ! -f "chrome-headless-shell-linux64.zip" ]]; then
-    echo "❌ Download failed"
+    echo " Download failed"
     exit 1
 fi
 
 # Get file size for verification
 SIZE=$(stat -c%s chrome-headless-shell-linux64.zip)
-echo "📦 Downloaded ${SIZE} bytes"
+echo " Downloaded ${SIZE} bytes"
 
 # Extract
-echo "📦 Extracting Chrome Headless Shell..."
+echo " Extracting Chrome Headless Shell..."
 unzip -q chrome-headless-shell-linux64.zip -d "$CHROME_DIR"
 
 # Make executable
@@ -82,24 +82,24 @@ rm chrome-headless-shell-linux64.zip
 
 # Verify installation
 if [[ -f "$CHROME_BINARY" ]]; then
-    echo "✅ Chrome Headless Shell installed successfully"
-    echo "🧪 Testing binary..."
+    echo " Chrome Headless Shell installed successfully"
+    echo " Testing binary..."
     
     if "$CHROME_BINARY" --version > /dev/null 2>&1; then
-        echo "✅ Chrome Headless Shell is working correctly"
+        echo " Chrome Headless Shell is working correctly"
         VERSION=$("$CHROME_BINARY" --version)
         echo "   Version: $VERSION"
         echo "   Location: $CHROME_BINARY"
     else
-        echo "⚠️  Chrome binary installed but may have dependency issues"
+        echo " Chrome binary installed but may have dependency issues"
         echo "   Try installing system dependencies:"
         echo "   sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libgconf-2-4 libxrandr2 libasound2 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0"
     fi
 else
-    echo "❌ Installation failed - binary not found"
+    echo " Installation failed - binary not found"
     exit 1
 fi
 
 echo ""
-echo "🎉 Chrome Headless Shell setup complete!"
+echo " Chrome Headless Shell setup complete!"
 echo "You can now run: node puppeteer-scanner.js --url=example.com"

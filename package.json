@@ -6,8 +6,10 @@
   "type": "module",
   "scripts": {
     "start": "node puppeteer-scanner.js",
+    "start:modular": "node puppeteer-scanner-modular.js",
     "install-deps": "npm install",
-    "test": "node puppeteer-scanner.js --url=google.com"
+    "test": "node puppeteer-scanner.js --url=google.com",
+    "test:modular": "node puppeteer-scanner-modular.js --url=google.com"
   },
   "keywords": [
     "puppeteer",

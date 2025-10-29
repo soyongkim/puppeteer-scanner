@@ -5,7 +5,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Chrome/Chromium binaries (downloaded during installation)
-chromium/
+chromium*/
 chrome-headless-shell-linux64.zip
 
 # Output files
