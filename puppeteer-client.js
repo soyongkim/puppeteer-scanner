@@ -97,7 +97,7 @@ async function main() {
     }
     await handleScanError(err, config, state);
     
-    if (config?.debugMode) {
+    if (config && config.debugMode) {
       console.error(err.stack);
     }
     process.exit(1);

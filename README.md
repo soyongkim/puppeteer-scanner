@@ -44,6 +44,8 @@ A powerful web scanner tool using Puppeteer to analyze webpage resources, domain
 
 ### Prerequisites
 
+**Important: Node.js v14.0.0 or higher is required** for full compatibility with modern JavaScript features.
+
 **Option 1: Use the install script (Recommended):**
 ```bash
 chmod +x install.sh
@@ -220,6 +222,22 @@ wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
 ```
 
 ### Node.js Issues
+
+**Syntax Error with Optional Chaining (`?.`):**
+If you see `SyntaxError: Unexpected token '.'`, your Node.js version is too old.
+
+```bash
+# Check your Node.js version
+node --version
+
+# If version is below v14.0.0, upgrade:
+# Via nvm (recommended):
+nvm install --lts
+nvm use --lts
+
+# Or try the simple installer:
+./simple-install.sh
+```
 
 **Node.js Not Found:**
 ```bash

@@ -92,7 +92,7 @@ export function setupPageListeners(page, state, config) {
     // Update domain stats
     incrementDomainStats(domain, state.domainStats, 'failed', {
       resourceType: resourceType,
-      errorMessage: failure?.errorText
+      errorMessage: failure && failure.errorText
     });
       
     // Add to failure tracking

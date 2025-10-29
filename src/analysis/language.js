@@ -21,7 +21,8 @@ export async function detectWebsiteLanguage(page) {
   return await page.evaluate(() => {
     // Simple text extraction using only visible elements
     const title = document.title || '';
-    const metaDescription = document.querySelector('meta[name="description"]')?.content || '';
+    const metaElement = document.querySelector('meta[name="description"]');
+    const metaDescription = metaElement ? metaElement.content : '';
     
     // Extract text from visible elements
     const allElements = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, div, span, a, td, th, li, article, section, main, nav, header, footer, button, label, input, textarea'));
@@ -54,8 +55,8 @@ export async function detectWebsiteLanguage(page) {
     
     // Get explicit language declarations with enhanced detection
     const htmlElement = document.documentElement || document.querySelector('html');
-    const htmlLang = (htmlElement?.lang || htmlElement?.getAttribute('lang') || '').toLowerCase().trim();
-    const bodyLang = (document.body?.lang || '').toLowerCase().trim();
+    const htmlLang = (htmlElement && (htmlElement.lang || htmlElement.getAttribute('lang')) || '').toLowerCase().trim();
+    const bodyLang = (document.body && document.body.lang || '').toLowerCase().trim();
     const metaLanguages = Array.from(
       document.querySelectorAll('meta[http-equiv="Content-Language"], meta[name="language"], meta[property="og:locale"]')
     ).map(m => (m.content || '').toLowerCase().trim()).filter(lang => lang.length > 0);
@@ -66,7 +67,7 @@ export async function detectWebsiteLanguage(page) {
       htmlLang: htmlLang,
       bodyLang: bodyLang,
       metaLanguages: metaLanguages,
-      documentHTML: document.documentElement?.outerHTML?.substring(0, 500) || 'No HTML found'
+      documentHTML: (document.documentElement && document.documentElement.outerHTML && document.documentElement.outerHTML.substring(0, 500)) || 'No HTML found'
     });
     
     // Parse lang codes to extract primary language (e.g., "fr-FR" -> "fr")
