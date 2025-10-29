@@ -4,14 +4,14 @@ A powerful web scanner tool using Puppeteer to analyze webpage resources, domain
 
 ## Features
 
-- 🔍 **Detailed Resource Analysis**: Records comprehensive resource information (URL, domain, type, method)
-- 📊 **Domain Tracking**: Monitors domains and their success/failure status
-- 🌐 **Proxy Support**: Optional proxy integration with QUIC protocol support
-- 🔄 **TCP Fallback**: Automatic fallback to TCP on QUIC connection failures
-- 📋 **CSV Export**: Detailed reporting with failed domains and error information
-- 📈 **Statistics**: Comprehensive statistics on resource and domain loading success rates
-- 🇯🇵 **Japanese Detection**: Optional Japanese content detection
-- 🚫 **Geo-blocking Detection**: Identifies geo-restricted content (451, 403 status codes)
+- **Detailed Resource Analysis**: Records comprehensive resource information (URL, domain, type, method)
+- **Domain Tracking**: Monitors domains and their success/failure status
+- **Proxy Support**: Optional proxy integration with QUIC protocol support
+- **TCP Fallback**: Automatic fallback to TCP on QUIC connection failures
+- **CSV Export**: Detailed reporting with failed domains and error information
+- **Statistics**: Comprehensive statistics on resource and domain loading success rates
+- **Language Detection**: Automatic language detection with Unicode pattern matching
+- **Modular Architecture**: Clean, maintainable codebase with separated concerns
 
 ## Quick Start
 
@@ -73,26 +73,29 @@ sudo yum install wget unzip
 ### Basic Usage
 
 ```bash
-node puppeteer-scanner.js --url=example.com
+node puppeteer-client.js --url=example.com
 ```
 
 ### Advanced Usage
 
 ```bash
 # With proxy support
-node puppeteer-scanner.js --url=example.com --use-proxy=true
+node puppeteer-client.js --url=example.com --use-proxy
 
 # With proxy and TCP fallback
-node puppeteer-scanner.js --url=example.com --use-proxy=true --tcp-fallback
+node puppeteer-client.js --url=example.com --use-proxy --tcp-fallback
 
 # Custom CSV output file
-node puppeteer-scanner.js --url=example.com --csv=my_analysis.csv
+node puppeteer-client.js --url=example.com --csv=my_analysis.csv
 
-# With Japanese content detection
-node puppeteer-scanner.js --url=example.com --jp
+# Disable language detection
+node puppeteer-client.js --url=example.com --no-lang
+
+# With debug output
+node puppeteer-client.js --url=example.com --debug
 
 # Complete example
-node puppeteer-scanner.js --url=example.com --use-proxy=true --tcp-fallback --jp --csv=detailed_analysis.csv
+node puppeteer-client.js --url=example.com --use-proxy --tcp-fallback --csv=detailed_analysis.csv --debug
 ```
 
 ### Command Line Options
@@ -102,7 +105,8 @@ node puppeteer-scanner.js --url=example.com --use-proxy=true --tcp-fallback --jp
 | `--url` | Target URL to scan (required) | - |
 | `--use-proxy` | Enable proxy mode | `false` |
 | `--tcp-fallback` | Enable TCP fallback on QUIC failures | `false` |
-| `--jp` | Enable Japanese content detection | `false` |
+| `--no-lang` | Disable language detection | `false` (detection enabled by default) |
+| `--debug` | Enable detailed debug output | `false` |
 | `--csv` | Output CSV filename | `webpage_analysis_results.csv` |
 
 ## Proxy Setup
@@ -122,8 +126,10 @@ The scanner generates:
    - Resource URLs and domains
    - Success/failure status
    - Error details for failed requests
+   - Language detection results (primary and declared languages)
    - Geo-blocking detection results
    - Performance metrics
+   - Proxy statistics (when using proxy mode)
 
 ## Technical Details
 
@@ -131,17 +137,22 @@ The scanner generates:
 
 The scanner uses a specific Chrome Headless Shell binary (version 140.0.7339.82) for consistent results across environments. This binary is automatically downloaded during installation to `./chromium/chrome-headless-shell-linux64/chrome-headless-shell`.
 
-Benefits of using Chrome Headless Shell:
-- **Lightweight**: Optimized for headless automation
-- **Consistent**: Same browser version across all environments
-- **Portable**: No system Chrome installation required
-- **Isolated**: Doesn't interfere with system browsers
-
 ### Dependencies
 
 - **puppeteer-core**: Headless Chrome automation
 - **node-fetch**: HTTP request library
 - Built-in Node.js modules: `dns/promises`, `fs`, `path`
+
+### Architecture
+
+The codebase is organized into a modular architecture:
+
+- **`puppeteer-client.js`**: Main entry point and CLI interface
+- **`src/scanner/`**: Core scanning functionality and browser management
+- **`src/analysis/`**: Result processing, language detection, and domain analysis
+- **`src/config/`**: Configuration and argument parsing
+- **`src/utils/`**: Utility functions for domains, CSV export, and logging
+- **`src/browser/`**: Browser launcher and setup
 
 ## Troubleshooting
 
@@ -216,7 +227,7 @@ sudo yum install chromium
 brew install --cask google-chrome
 ```
 
-Then modify the `executablePath` in `puppeteer-scanner.js` to point to your system Chrome.
+Then modify the `executablePath` in `src/browser/launcher.js` to point to your system Chrome.
 
 ### Proxy Connection Issues
 
