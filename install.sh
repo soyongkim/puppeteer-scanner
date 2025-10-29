@@ -59,10 +59,11 @@ install_nodejs_via_nvm() {
         exit 1
     fi
     
-    # Install latest LTS Node.js
+    # Install latest LTS Node.js (v20+ required for Puppeteer)
     echo " Installing latest LTS Node.js..."
     nvm install --lts
     nvm use --lts
+    nvm alias default lts/*
     
     # Ensure nvm is available in new terminal sessions
     if ! grep -q "NVM_DIR" ~/.bashrc; then
@@ -78,32 +79,40 @@ install_nodejs_via_nvm() {
         echo " nvm already configured in ~/.bashrc"
     fi
     
-    echo " Node.js installed via nvm"
+    # Verify Node.js installation
+    if command -v node &> /dev/null; then
+        echo " Node.js $(node --version) installed successfully via nvm"
+        echo " npm $(npm --version) is available"
+    else
+        echo " Error: Node.js installation verification failed"
+        echo " Please restart your terminal and run the script again"
+        exit 1
+    fi
 }
 
 # Check if Node.js is installed
 if ! command -v node &> /dev/null; then
     echo " Node.js is not installed!"
     echo ""
-    echo "We recommend installing Node.js via nvm (Node Version Manager)."
-    echo "This allows you to easily manage multiple Node.js versions."
+    echo "Puppeteer Scanner requires Node.js v20.0.0 or higher."
+    echo "We recommend installing via nvm (Node Version Manager) for best compatibility."
     echo ""
-    read -p "Would you like to install Node.js via nvm? (y/n): " -n 1 -r
+    read -p "Would you like to install Node.js LTS via nvm? (y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         install_nodejs_via_nvm
     else
-        echo "Please install Node.js manually:"
-        echo "  - Via nvm: https://github.com/nvm-sh/nvm#installing-and-updating"
+        echo "Please install Node.js v20+ manually:"
+        echo "  - Via nvm (recommended): wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash"
+        echo "  - Via NodeSource: wget -qO- https://deb.nodesource.com/setup_lts.x | sudo -E bash -"
         echo "  - Direct download: https://nodejs.org/"
-        echo "  - Package manager: sudo apt install nodejs npm (Ubuntu/Debian)"
         exit 1
     fi
 fi
 
 # Check Node.js version
 NODE_VERSION=$(node --version | cut -d'v' -f2)
-REQUIRED_VERSION="16.0.0"
+REQUIRED_VERSION="20.0.0"
 
 # Simple version comparison (works for most cases)
 compare_versions() {
@@ -122,21 +131,30 @@ compare_versions() {
 }
 
 if ! compare_versions "$NODE_VERSION" "$REQUIRED_VERSION"; then
-    echo " Node.js version $NODE_VERSION detected. Version 16.0.0 or higher is recommended."
+    echo " Node.js version $NODE_VERSION detected. Version 20.0.0 or higher is required for Puppeteer."
     echo ""
     if command -v nvm &> /dev/null; then
-        echo "You have nvm installed. You can upgrade Node.js with:"
-        echo "  nvm install --lts"
-        echo "  nvm use --lts"
+        echo "Upgrading Node.js to latest LTS..."
+        nvm install --lts
+        nvm use --lts
+        nvm alias default lts/*
+        echo " Node.js upgraded to $(node --version)"
     else
-        echo "Consider using nvm to manage Node.js versions:"
-        echo "  https://github.com/nvm-sh/nvm#installing-and-updating"
-    fi
-    echo ""
-    read -p "Continue anyway? (y/n): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
+        echo "Please upgrade Node.js:"
+        echo "  Option 1 - Install nvm and upgrade:"
+        echo "    wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash"
+        echo "    source ~/.bashrc"
+        echo "    nvm install --lts"
+        echo ""
+        echo "  Option 2 - Use NodeSource repository:"
+        echo "    wget -qO- https://deb.nodesource.com/setup_lts.x | sudo -E bash -"
+        echo "    sudo apt-get install -y nodejs"
+        echo ""
+        read -p "Continue with current version anyway? (y/n): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
     fi
 fi
 
