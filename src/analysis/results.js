@@ -4,15 +4,15 @@
  */
 
 import {
-    analyzeRedirectAndIP,
-    calculateDomainStatistics,
-    detectCloudflareChallenge,
-    extractConnectionStatistics
+  analyzeRedirectAndIP,
+  calculateDomainStatistics,
+  detectCloudflareChallenge,
+  extractConnectionStatistics
 } from '../analysis/domains.js';
 import {
-    createErrorLanguageResults,
-    createSkippedLanguageResults,
-    detectWebsiteLanguage
+  createErrorLanguageResults,
+  createSkippedLanguageResults,
+  detectWebsiteLanguage
 } from '../analysis/language.js';
 import { extractStatusFromProxyConnection, fetchProxyStats, getDefaultProxyStats } from '../network/proxy.js';
 import { escapeCsvField, writeToCsv } from '../utils/csv.js';

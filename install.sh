@@ -83,6 +83,10 @@ install_nodejs_via_nvm() {
     if command -v node &> /dev/null; then
         echo " Node.js $(node --version) installed successfully via nvm"
         echo " npm $(npm --version) is available"
+        echo ""
+        echo " IMPORTANT: If you encounter syntax errors later, run:"
+        echo "   source ~/.bashrc"
+        echo " Or restart your terminal to ensure nvm environment is loaded."
     else
         echo " Error: Node.js installation verification failed"
         echo " Please restart your terminal and run the script again"

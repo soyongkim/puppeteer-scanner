@@ -3,6 +3,7 @@
  */
 
 import { error, log } from '../utils/logger.js';
+import { PROXY_CONFIG, PROXY_STATS_CONFIG } from './constants.js';
 
 /**
  * Parse command line arguments into a structured object
@@ -47,13 +48,21 @@ export function getConfiguration(argMap) {
     tcpFallback: argMap['tcp-fallback'] === true || argMap['tcp-fallback'] === 'true',
     useLanguageDetection: !(argMap['no-lang'] === true || argMap['no-lang'] === 'true'),
     noAdBlocking: argMap['no-ad'] === true || argMap['no-ad'] === 'true',
-    proxyPort: argMap['proxy-port'] || '4433',
-    reportPort: argMap['report-port'] || '9090',
+    proxyPort: argMap['proxy-port'] || PROXY_CONFIG.PORT.toString(),
+    reportPort: argMap['report-port'] || PROXY_STATS_CONFIG.PORT.toString(),
     debugMode: argMap.debug === true || argMap.debug === 'true'
   };
   
-  config.proxyHost = `http://localhost:${config.proxyPort}`;
-  config.reportUrl = `http://localhost:${config.reportPort}/stats`;
+  // Use constants for proxy configuration with user override support
+  const proxyHost = argMap['proxy-host'] || PROXY_CONFIG.HOST;
+  const proxyProtocol = argMap['proxy-protocol'] || PROXY_CONFIG.PROTOCOL;
+  config.proxyHost = `${proxyProtocol}://${proxyHost}:${config.proxyPort}`;
+  
+  // Use constants for report configuration with user override support  
+  const reportHost = argMap['report-host'] || PROXY_STATS_CONFIG.HOST;
+  const reportProtocol = argMap['report-protocol'] || PROXY_STATS_CONFIG.PROTOCOL;
+  const reportEndpoint = argMap['report-endpoint'] || PROXY_STATS_CONFIG.ENDPOINT;
+  config.reportUrl = `${reportProtocol}://${reportHost}:${config.reportPort}${reportEndpoint}`;
   
   return config;
 }

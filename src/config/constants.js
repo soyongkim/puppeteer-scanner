@@ -120,9 +120,23 @@ export const LANGUAGE_PATTERNS = {
   JAPANESE_PUNCTUATION: /[\u3000-\u303f]/
 };
 
-// Geo-restriction keywords
-export const GEO_RESTRICTION_KEYWORDS = [
-  'not available', 'blocked', 'restricted', 'unavailable',
-  'region', 'country', 'location', 'geographic', 'geolocation',
-  'vpn', 'proxy', 'access denied', 'forbidden'
-];
+// Proxy configuration
+export const PROXY_CONFIG = {
+  HOST: 'localhost',
+  PORT: 4433,
+  PROTOCOL: 'http',
+  get URL() {
+    return `${this.PROTOCOL}://${this.HOST}:${this.PORT}`;
+  }
+};
+
+// Proxy stats/report configuration
+export const PROXY_STATS_CONFIG = {
+  HOST: 'localhost',
+  PORT: 9090,
+  PROTOCOL: 'http',
+  ENDPOINT: '/stats',
+  get URL() {
+    return `${this.PROTOCOL}://${this.HOST}:${this.PORT}${this.ENDPOINT}`;
+  }
+};
