@@ -87,12 +87,12 @@ export function parseConnectionsDetail(connectionsDetail, debugMode = false) {
       
       // Parse domain:ip:port from first part
       const domainParts = parts[0].split(':');
-      if (domainParts.length < 3) return;
+      if (domainParts.length < 2) return; // Need at least domain:ip
       
       const connection = {
         domain: domainParts[0],
-        ip: domainParts[1],
-        port: domainParts[2],
+        ip: domainParts[1] || '-',
+        port: domainParts[2] || '-',
         statusInfo: {},
         migrationDisabled: false,
         statelessReset: false,
@@ -116,6 +116,10 @@ export function parseConnectionsDetail(connectionsDetail, debugMode = false) {
             connection.connectionFailed = true;
             connection.failureReason = 'handshake fail';
             connection.statusInfo['handshake fail'] = '1';
+          } else if (statusPart.includes('failed to lookup address')) {
+            connection.connectionFailed = true;
+            connection.failureReason = 'failed to lookup address';
+            connection.statusInfo['failed to lookup address'] = '1';
           } else if (statusPart.includes('Connection Close')) {
             connection.statusInfo['Connection Close'] = statusPart.split(': ')[1] || '1';
             connection.connectionFailed = true;
@@ -194,7 +198,7 @@ export function extractRealIPFromProxy(targetDomain, proxyStats, debugMode = fal
   }
   
   if (targetConnection) {
-    debug(`Found connection for ${targetDomain}: ${targetConnection.ip} (from ${targetConnection.domain})`, debugMode);
+    debug(`Found connection for ${targetDomain}: ${targetConnection.ip} (from ${targetConnection.domain}), Failed: ${targetConnection.connectionFailed}`, debugMode);
     return {
       ip: targetConnection.ip,
       domain: targetConnection.domain,
@@ -202,7 +206,9 @@ export function extractRealIPFromProxy(targetDomain, proxyStats, debugMode = fal
       totalData: targetConnection.totalData,
       migrationDisabled: targetConnection.migrationDisabled,
       newConnectionIdReceived: targetConnection.newConnectionIdReceived,
-      pathValidationState: targetConnection.pathValidationState
+      pathValidationState: targetConnection.pathValidationState,
+      connectionFailed: targetConnection.connectionFailed,
+      failureReason: targetConnection.failureReason
     };
   }
   
@@ -256,6 +262,10 @@ export function extractStatusFromProxyConnection(targetDomain, proxyStats) {
     }
     
     // Check for connection errors
+    if (statusInfo['failed to lookup address']) {
+      return 'failed to lookup address';
+    }
+    
     if (statusInfo['Connection Close']) {
       return `Connection Close: ${statusInfo['Connection Close']}`;
     }
@@ -285,6 +295,5 @@ export function getDefaultProxyStats() {
     total_data_amount: 0,
     total_migrated_data_amount: 0,
     migration_success_rate: '0%',
-    dns_fallback_occurred: false
   };
 }

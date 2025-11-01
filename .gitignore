@@ -12,6 +12,7 @@ chrome-headless-shell-linux64.zip
 *.csv
 webpage_analysis_results.csv
 netlog.json
+scan_results/
 
 # OS generated files
 .DS_Store

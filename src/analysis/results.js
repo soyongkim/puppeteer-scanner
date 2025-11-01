@@ -4,15 +4,15 @@
  */
 
 import {
-  analyzeRedirectAndIP,
-  calculateDomainStatistics,
-  detectCloudflareChallenge,
-  extractConnectionStatistics
+    analyzeRedirectAndIP,
+    calculateDomainStatistics,
+    detectCloudflareChallenge,
+    extractConnectionStatistics
 } from '../analysis/domains.js';
 import {
-  createErrorLanguageResults,
-  createSkippedLanguageResults,
-  detectWebsiteLanguage
+    createErrorLanguageResults,
+    createSkippedLanguageResults,
+    detectWebsiteLanguage
 } from '../analysis/language.js';
 import { extractStatusFromProxyConnection, fetchProxyStats, getDefaultProxyStats } from '../network/proxy.js';
 import { escapeCsvField, writeToCsv } from '../utils/csv.js';
@@ -475,12 +475,25 @@ export async function handleScanError(err, config, state) {
       }
       // Clean up global variable
       delete global.errorCaseRealIP;
-    } else if (state.firstMainDocumentStatus || state.highestPriorityStatus) {
-      errorOriginalIP = 'BLOCKED';
-      errorRedirectedIP = 'BLOCKED';
     } else {
-      errorOriginalIP = 'ERROR';
-      errorRedirectedIP = 'ERROR';
+      // Try to extract connection info directly from proxy stats for error cases
+      if (proxyStats && proxyStats.connections_detail) {
+        const { extractRealIPFromProxy } = await import('../network/proxy.js');
+        const realIPInfo = extractRealIPFromProxy(config.targetUrl, proxyStats, config.debugMode);
+        if (realIPInfo) {
+          // Even if connection failed, we might have attempted IP or error info
+          errorOriginalIP = realIPInfo.ip === '-' ? 'DNS_FAILED' : realIPInfo.ip;
+          debug(`[ERROR-IP-EXTRACT] Connection info for ${config.targetUrl}: IP=${realIPInfo.ip}, Failed=${realIPInfo.connectionFailed}`, config.debugMode);
+        } else {
+          errorOriginalIP = 'DNS_FAILED';
+        }
+      } else if (state.firstMainDocumentStatus || state.highestPriorityStatus) {
+        errorOriginalIP = 'BLOCKED';
+        errorRedirectedIP = 'BLOCKED';
+      } else {
+        errorOriginalIP = 'DNS_FAILED';
+        errorRedirectedIP = 'DNS_FAILED';
+      }
     }
     
     log(`[DEBUG] Error case - First main status: ${state.firstMainDocumentStatus || 'None'}, Priority status: ${state.highestPriorityStatus || 'None'}, Chrome error: ${chromeErrorForCsv}`);

@@ -1,40 +1,58 @@
 #!/bin/bash
 
 # =============================================================================
-# Puppeteer QUIC Parallel Scanner (UPDATED)
+# QUIC Proxy - Client Scanner
 # =============================================================================
-# This script tests geo-blocking bypassing using QUIC proxy and connection migration
-# 
-# UPDATED: Now compatible with compare_enhanced.js proxy statistics integration
-#          Records comprehensive proxy stats including connection migration data
-# 
+# This script performs automated testing of domains through QUIC proxy with connection 
+# migration capabilities. For each test, it spawns fresh proxy and client instances to 
+# ensure stable and isolated results.
+#
+# How it works:
+# 1. Reads domain list from input file
+# 2. For each domain test:
+#    - Starts a fresh QUIC proxy server instance (script_proxy.sh + quiche_server)
+#    - Runs client test (puppeteer_chromium_client.js) against the domain through proxy
+#    - Collects comprehensive performance and migration statistics
+#    - Kills both proxy and client processes completely
+#    - Repeats for next domain with clean proxy/client session
+# 3. Supports parallel execution with isolated proxy instances per worker
+# 4. Aggregates results into CSV format
+#
 # Usage:
-#   ./puppeteer-quic-parallel.sh [options]
+#   ./proxy_client_scanner.sh [options]
 #
 # Options:
-#   --input=FILE         Input domain list (default: geo_blocking_list.txt)
-#   --output_dir=DIR     Output directory (default: bypassing_results)
+#   --input=FILE         Input domain list (default: tranco_full_list.txt)
+#   --output_dir=DIR     Output directory (default: bypassing_results_tic_test)
 #   --start=N            Start from domain N (for resumption)
 #   --max=N              Maximum domains to process
 #   --parallel=N         Number of parallel scans (default: 1)
+#   --interface=NAME     Network interface for proxy (e.g., eth0, nordlynx)
+#   --migrate=NAME       Migration interface for proxy (e.g., nordlynx)
+#   --num=N              Number of runs per domain (default: 1)
+#   --num=mad_3          MAD analysis with 3 target runs (baseline + migration)
+#   --num=mad_5          MAD analysis with 5 target runs (baseline + migration)
+#   --no-proxy           Run without proxy (direct connection)
+#   --pv-migration       Enable path validation migration in proxy
 #
 # Output CSV Format:
 #   Compatible with compare_enhanced.js format including proxy statistics:
-#   SNI, ip addr, ip country, main status, languages, domains analysis,
-#   TCP return, total_connections, total_data_amount, total_migrated_data_amount, migration_success_rate
+#   SNI, ip_addr, ip_country, main_status, languages, domains_analysis,
+#   TCP_return, total_connections, total_data_amount, total_migrated_data_amount, 
+#   migration_success_rate, load_time, and 30+ additional performance metrics
 # =============================================================================
-
 
 set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLIENT_SCRIPT="$HOME/Workspace/headless_chromium/compare_enhanced.js"
-PROXY_SCRIPT="$HOME/Workspace/quic_proxy/script_proxy.sh"
+CLIENT_SCRIPT="$HOME/Workspace/puppeteer_scanner/puppeteer-client.js"
+CLIENT_SCRIPT_DIR="$(dirname "$CLIENT_SCRIPT")"
+PROXY_SCRIPT="$HOME/Workspace/quic_proxy/launch_proxy.sh"
 
 # Default settings
-INPUT_FILE="$SCRIPT_DIR/tranco_.txt"
-OUTPUT_DIR="$SCRIPT_DIR/bypassing_results_tic_test"
+INPUT_FILE="$SCRIPT_DIR/tranco_full_list.txt"
+OUTPUT_DIR="$SCRIPT_DIR/scan_results"
 START_FROM=1
 MAX_DOMAINS=0
 PARALLEL_JOBS=1
@@ -46,12 +64,6 @@ NO_PROXY=false
 PV_MIGRATION=false
 MAD_MODE=""
 MAD_TARGET_RUNS=0
-
-# ── Checkpoint/Resume Configuration ──────────────────────────────────────────
-CHECKPOINT_DIR="$SCRIPT_DIR/state"
-CHECKPOINT_FILE="$CHECKPOINT_DIR/checkpoint.json"
-RESUME_MODE=false
-RESUME_FROM_INDEX=1
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -111,10 +123,6 @@ while [[ $# -gt 0 ]]; do
             PV_MIGRATION=true
             shift
             ;;
-        --resume)
-            RESUME_MODE=true
-            shift
-            ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo ""
@@ -132,7 +140,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --num=mad_5          MAD analysis with 5 target runs (baseline + migration)"
             echo "  --no-proxy           Run without proxy (direct connection)"
             echo "  --pv-migration       Enable path validation migration in proxy"
-            echo "  --resume             Resume from last checkpoint"
             echo ""
             echo "Examples:"
             echo "  $0                                    # Scan all domains (dual interface mode)"
@@ -142,7 +149,6 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --parallel=3                      # Run 3 parallel scans"
             echo "  $0 --num=3                           # Run each domain 3 times for consistency"
             echo "  $0 --no-proxy                        # Run without proxy (direct connection)"
-            echo "  $0 --resume                          # Resume from last checkpoint"
             exit 0
             ;;
         *)
@@ -155,34 +161,34 @@ done
 
 # ── Validation ───────────────────────────────────────────────────────────────
 if [[ ! -f "$INPUT_FILE" ]]; then
-    echo "❌ Error: Input file '$INPUT_FILE' not found"
+    echo "Error: Input file '$INPUT_FILE' not found"
     exit 1
 fi
 
 if [[ ! -f "$CLIENT_SCRIPT" ]]; then
-    echo "❌ Error: Client script '$CLIENT_SCRIPT' not found"
+    echo "Error: Client script '$CLIENT_SCRIPT' not found"
     exit 1
 fi
 
 if [[ ! -f "$PROXY_SCRIPT" ]] && [[ "$NO_PROXY" != "true" ]]; then
-    echo "❌ Error: Proxy script '$PROXY_SCRIPT' not found"
+    echo "Error: Proxy script '$PROXY_SCRIPT' not found"
     exit 1
 fi
 
 # Verify that the client script has fetchProxyStats function (enhanced version)
 if ! grep -q "fetchProxyStats" "$CLIENT_SCRIPT" && [[ "$NO_PROXY" != "true" ]]; then
-    echo "⚠️  Warning: Client script may not have proxy statistics support"
+    echo "Warning: Client script may not have proxy statistics support"
     echo "   Make sure you're using the enhanced version with fetchProxyStats()"
 fi
 
 # Validate NUM_RUNS parameter
 if ! [[ "$NUM_RUNS" =~ ^[1-9][0-9]*$ ]]; then
-    echo "❌ Error: --num must be a positive integer (got: $NUM_RUNS)"
+    echo "Error: --num must be a positive integer (got: $NUM_RUNS)"
     exit 1
 fi
 
 if [[ $NUM_RUNS -gt 10 ]]; then
-    echo "⚠️  Warning: Running $NUM_RUNS tests per domain - this will take significantly longer"
+    echo "Warning: Running $NUM_RUNS tests per domain - this will take significantly longer"
     read -p "Continue? (y/N): " -r
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Cancelled by user"
@@ -214,7 +220,7 @@ log() {
 
 error_log() {
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] ❌ ERROR: $1" | tee -a "$LOG_FILE"
+    echo "[$timestamp] ERROR: $1" | tee -a "$LOG_FILE"
 }
 
 # Format seconds into human readable time
@@ -230,185 +236,6 @@ format_duration() {
         printf "%dm %ds" $minutes $secs
     else
         printf "%ds" $secs
-    fi
-}
-
-# ── Checkpoint/Resume Functions ───────────────────────────────────────────────
-
-# Create checkpoint directory
-ensure_checkpoint_dir() {
-    mkdir -p "$CHECKPOINT_DIR"
-}
-
-# Save checkpoint state
-save_checkpoint() {
-    local current_phase="$1"
-    local current_domain_index="$2"
-    local current_run="$3"
-    local interface="$4"
-    local migrate_interface="$5"
-    local worker_id="${6:-0}"
-    
-    local checkpoint_data=$(cat << EOF
-{
-    "timestamp": "$(date -Iseconds)",
-    "phase": "$current_phase",
-    "scan_id": "$TIMESTAMP",
-    "output_dir": "$TIMESTAMPED_OUTPUT_DIR",
-    "input_file": "$INPUT_FILE",
-    "configuration": {
-        "start_from": $START_FROM,
-        "max_domains": $MAX_DOMAINS,
-        "parallel_jobs": $PARALLEL_JOBS,
-        "num_runs": $NUM_RUNS,
-        "timeout": $TIMEOUT,
-        "interface": "$interface",
-        "migrate_interface": "$migrate_interface",
-        "no_proxy": $NO_PROXY,
-        "pv_migration": $PV_MIGRATION
-    },
-    "progress": {
-        "current_domain_index": $current_domain_index,
-        "current_run": $current_run,
-        "worker_id": $worker_id,
-        "domains_completed": [],
-        "last_successful_domain": "",
-        "parallel_workers": {}
-    },
-    "files": {
-        "log_file": "$LOG_FILE",
-        "csv_files": [],
-        "worker_output_dir": ""
-    }
-}
-EOF
-    )
-    
-    echo "$checkpoint_data" > "$CHECKPOINT_FILE"
-    log "💾 Checkpoint saved: Phase '$current_phase', Domain index $current_domain_index, Run $current_run"
-}
-
-# Update checkpoint with completed domain
-update_checkpoint_domain() {
-    local domain="$1"
-    local success="$2"
-    local worker_id="${3:-0}"
-    
-    if [[ -f "$CHECKPOINT_FILE" ]]; then
-        # Use jq to update the checkpoint if available, otherwise basic update
-        if command -v jq >/dev/null 2>&1; then
-            local temp_file=$(mktemp)
-            jq --arg domain "$domain" --arg success "$success" --arg worker "$worker_id" --arg timestamp "$(date -Iseconds)" '
-                .timestamp = $timestamp |
-                .progress.domains_completed += [{"domain": $domain, "success": ($success == "true"), "worker_id": ($worker | tonumber), "completed_at": $timestamp}] |
-                .progress.last_successful_domain = (if $success == "true" then $domain else .progress.last_successful_domain end) |
-                if .progress.parallel_workers[$worker] then
-                    .progress.parallel_workers[$worker].completed_domains = ((.progress.parallel_workers[$worker].completed_domains // 0) + 1)
-                else
-                    .progress.parallel_workers[$worker] = {"completed_domains": 1}
-                end
-            ' "$CHECKPOINT_FILE" > "$temp_file" && mv "$temp_file" "$CHECKPOINT_FILE"
-        else
-            # Fallback: simple append to a separate completed domains file
-            echo "$(date -Iseconds),$domain,$success,$worker_id" >> "$CHECKPOINT_DIR/completed_domains.log"
-        fi
-    fi
-}
-
-# Update checkpoint with parallel worker progress
-update_checkpoint_worker() {
-    local worker_id="$1"
-    local chunk_file="$2"
-    local current_domain_index="$3"
-    local current_run="$4"
-    local port="$5"
-    
-    if [[ -f "$CHECKPOINT_FILE" ]] && command -v jq >/dev/null 2>&1; then
-        local temp_file=$(mktemp)
-        jq --arg worker_id "$worker_id" --arg chunk_file "$chunk_file" --arg domain_index "$current_domain_index" --arg current_run "$current_run" --arg port "$port" --arg timestamp "$(date -Iseconds)" '
-            .timestamp = $timestamp |
-            .progress.parallel_workers[$worker_id] = {
-                "chunk_file": $chunk_file,
-                "current_domain_index": ($domain_index | tonumber),
-                "current_run": ($current_run | tonumber),
-                "port": ($port | tonumber),
-                "last_update": $timestamp
-            }
-        ' "$CHECKPOINT_FILE" > "$temp_file" && mv "$temp_file" "$CHECKPOINT_FILE"
-    fi
-}
-
-# Load checkpoint state
-load_checkpoint() {
-    if [[ ! -f "$CHECKPOINT_FILE" ]]; then
-        error_log "No checkpoint file found: $CHECKPOINT_FILE"
-        return 1
-    fi
-    
-    log "📖 Loading checkpoint from: $CHECKPOINT_FILE"
-    
-    # Basic validation
-    if ! command -v jq >/dev/null 2>&1; then
-        error_log "jq is required for checkpoint resume functionality"
-        error_log "Install with: sudo apt-get install jq"
-        return 1
-    fi
-    
-    # Load and validate checkpoint
-    if ! jq empty "$CHECKPOINT_FILE" 2>/dev/null; then
-        error_log "Invalid checkpoint file format"
-        return 1
-    fi
-    
-    # Extract key information
-    local saved_scan_id=$(jq -r '.scan_id' "$CHECKPOINT_FILE")
-    local saved_output_dir=$(jq -r '.output_dir' "$CHECKPOINT_FILE")
-    local saved_phase=$(jq -r '.phase' "$CHECKPOINT_FILE")
-    local saved_domain_index=$(jq -r '.progress.current_domain_index' "$CHECKPOINT_FILE")
-    local saved_run=$(jq -r '.progress.current_run' "$CHECKPOINT_FILE")
-    
-    log "📋 Checkpoint info:"
-    log "   Scan ID: $saved_scan_id"
-    log "   Phase: $saved_phase"
-    log "   Output directory: $saved_output_dir"
-    log "   Last domain index: $saved_domain_index"
-    log "   Last run: $saved_run"
-    
-    # Restore configuration from checkpoint
-    TIMESTAMP="$saved_scan_id"
-    TIMESTAMPED_OUTPUT_DIR="$saved_output_dir"
-    START_FROM=$(jq -r '.configuration.start_from' "$CHECKPOINT_FILE")
-    MAX_DOMAINS=$(jq -r '.configuration.max_domains' "$CHECKPOINT_FILE")
-    PARALLEL_JOBS=$(jq -r '.configuration.parallel_jobs' "$CHECKPOINT_FILE")
-    NUM_RUNS=$(jq -r '.configuration.num_runs' "$CHECKPOINT_FILE")
-    TIMEOUT=$(jq -r '.configuration.timeout' "$CHECKPOINT_FILE")
-    INTERFACE=$(jq -r '.configuration.interface' "$CHECKPOINT_FILE")
-    MIGRATE=$(jq -r '.configuration.migrate_interface' "$CHECKPOINT_FILE")
-    NO_PROXY=$(jq -r '.configuration.no_proxy' "$CHECKPOINT_FILE")
-    PV_MIGRATION=$(jq -r '.configuration.pv_migration' "$CHECKPOINT_FILE")
-    
-    # Update file paths
-    LOG_FILE="$TIMESTAMPED_OUTPUT_DIR/scan.log"
-    CSV_FILE="$TIMESTAMPED_OUTPUT_DIR/bypassing_results"
-    SUMMARY_FILE="$TIMESTAMPED_OUTPUT_DIR/summary.txt"
-    
-    # Calculate resume position
-    local completed_domains=($(jq -r '.progress.domains_completed[]?.domain // empty' "$CHECKPOINT_FILE" 2>/dev/null))
-    RESUME_FROM_INDEX=$((${#completed_domains[@]} + START_FROM))
-    
-    log "📍 Resuming from domain index: $RESUME_FROM_INDEX"
-    log "✅ Checkpoint loaded successfully"
-    
-    return 0
-}
-
-# Clean up checkpoint after successful completion
-cleanup_checkpoint() {
-    if [[ -f "$CHECKPOINT_FILE" ]]; then
-        log "🧹 Cleaning up checkpoint file..."
-        local backup_file="$CHECKPOINT_DIR/checkpoint_completed_$(date +%Y%m%d_%H%M%S).json"
-        mv "$CHECKPOINT_FILE" "$backup_file"
-        log "📁 Checkpoint backed up to: $backup_file"
     fi
 }
 
@@ -430,7 +257,7 @@ divide_domains() {
     local total_domains=$(wc -l < "$domains_file")
     local chunk_size=$(( (total_domains + num_chunks - 1) / num_chunks ))  # Round up
     
-    log "📊 Dividing $total_domains domains into $num_chunks chunks (~$chunk_size domains each)"
+    log "Dividing $total_domains domains into $num_chunks chunks (~$chunk_size domains each)"
     
     # Global variable to store chunk files
     CHUNK_FILES=()
@@ -446,7 +273,7 @@ divide_domains() {
         
         if [[ $actual_lines -gt 0 ]]; then
             CHUNK_FILES+=("$chunk_file")
-            log "  📝 Chunk $i: lines $start_line-$end_line ($actual_lines domains) -> $chunk_file"
+            log "Chunk $i: lines $start_line-$end_line ($actual_lines domains) -> $chunk_file"
         else
             rm -f "$chunk_file"  # Remove empty chunk
         fi
@@ -562,29 +389,21 @@ run_parallel_worker() {
         echo "[$timestamp] [Worker-$worker_id] $1" >> "$worker_log"
     }
     
-    worker_log "🚀 Starting parallel worker $worker_id"
-    worker_log "📁 Chunk file: $chunk_file"
-    worker_log "🔌 Proxy port: $worker_port (dedicated instance)"
-    worker_log "📊 Interface: $interface${migrate_interface:+ -> $migrate_interface}"
+    worker_log "Starting parallel worker $worker_id"
+    worker_log "Chunk file: $chunk_file"
+    worker_log "Proxy port: $worker_port (dedicated instance)"
+    worker_log "Interface: $interface${migrate_interface:+ -> $migrate_interface}"
     
     local domains=($(cat "$chunk_file"))
     local total_chunk_domains=${#domains[@]}
     
-    # Determine resume position for this worker
+    # Start from the beginning
     local resume_from=1
-    if [[ "$RESUME_MODE" == "true" ]] && [[ -f "$CHECKPOINT_FILE" ]]; then
-        # Check if this worker has checkpoint data
-        local worker_last_index=$(jq -r ".progress.parallel_workers[\"$worker_id\"].current_domain_index // 1" "$CHECKPOINT_FILE" 2>/dev/null)
-        if [[ "$worker_last_index" != "null" && $worker_last_index -gt 1 ]]; then
-            resume_from=$worker_last_index
-            worker_log "📍 Resuming from domain index $resume_from"
-        fi
-    fi
     
     if [[ -n "$mad_mode" ]]; then
-        worker_log "📋 Processing $total_chunk_domains domains with MAD analysis ($mad_mode: $((mad_target_runs * 2)) total runs) (starting from index $resume_from)"
+        worker_log "Processing $total_chunk_domains domains with MAD analysis ($mad_mode: $((mad_target_runs * 2)) total runs) (starting from index $resume_from)"
     else
-        worker_log "📋 Processing $total_chunk_domains domains with $NUM_RUNS runs each (starting from index $resume_from)"
+        worker_log "Processing $total_chunk_domains domains with $NUM_RUNS runs each (starting from index $resume_from)"
     fi
     
     # Apply resume offset
@@ -601,53 +420,47 @@ run_parallel_worker() {
         current=$((current + 1))
         local global_index=$((resume_from + current - 1))
         
-        worker_log "🔍 [$current/${#domains[@]}] Testing: $domain (Global: #$global_index)"
-        
-        # Update checkpoint before starting domain
-        update_checkpoint_worker "$worker_id" "$chunk_file" "$global_index" "1" "$worker_port"
+        worker_log "[$current/${#domains[@]}] Testing: $domain (Global: #$global_index)"
         
         # Test domain based on mode (MAD analysis or regular runs)
         local domain_success=false
         if [[ -n "$mad_mode" ]]; then
             # MAD analysis mode
-            worker_log "🧮 MAD analysis mode: $mad_mode (target runs: $mad_target_runs per phase)"
+            worker_log "MAD analysis mode: $mad_mode (target runs: $mad_target_runs per phase)"
             
             # Call the full MAD analysis function with worker ID and port
             if test_domain_mad "$domain" "$global_index" "$interface" "$migrate_interface" "$mad_target_runs" "$worker_id" "$worker_port"; then
                 domain_success=true
-                worker_log "✅ [$current/${#domains[@]}] MAD analysis completed: $domain"
+                worker_log "[$current/${#domains[@]}] MAD analysis completed: $domain"
             else
-                worker_log "❌ [$current/${#domains[@]}] MAD analysis failed: $domain"
+                worker_log "[$current/${#domains[@]}] MAD analysis failed: $domain"
             fi
         else
             # Regular mode - Test domain multiple times as specified by NUM_RUNS
             for ((run=1; run<=NUM_RUNS; run++)); do
                 if [[ $NUM_RUNS -gt 1 ]]; then
-                    worker_log "  🔄 Run $run/$NUM_RUNS for $domain"
+                    worker_log "  Run $run/$NUM_RUNS for $domain"
                 fi
-                
-                # Update checkpoint with current run
-                update_checkpoint_worker "$worker_id" "$chunk_file" "$global_index" "$run" "$worker_port"
                 
                 # Start proxy for this run
                 if ! start_proxy_worker "$interface" "$migrate_interface" "$worker_port" "$worker_id" "$worker_output_dir"; then
-                    worker_log "❌ Failed to start proxy for $domain run $run"
+                    worker_log "Failed to start proxy for $domain run $run"
                     continue
                 fi
                 
                 # Wait for proxy to be ready
-                sleep 2
+                sleep 1
                 
                 # Calculate report port for this worker (same as in start_proxy_worker)
                 local report_port=$((9090 + worker_id * 10))
                 
                 # Run test with custom proxy port and report port
-                cd "$HOME/Workspace/headless_chromium"
+                cd "$CLIENT_SCRIPT_DIR"
                 if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --proxy-port="$worker_port" --report-port="$report_port" --csv="$worker_csv" --url="$domain" >> "$worker_log" 2>&1; then
                     domain_success=true
-                    worker_log "✅ Run $run/$NUM_RUNS completed for $domain"
+                    worker_log "Run $run/$NUM_RUNS completed for $domain"
                 else
-                    worker_log "❌ Run $run/$NUM_RUNS failed for $domain"
+                    worker_log "Run $run/$NUM_RUNS failed for $domain"
                 fi
                 
                 # Stop proxy after each run
@@ -659,23 +472,21 @@ run_parallel_worker() {
         if [[ $domain_success == true ]]; then
             success_count=$((success_count + 1))
             if [[ -n "$mad_mode" ]]; then
-                worker_log "✅ MAD analysis completed: $domain"
+                worker_log "MAD analysis completed: $domain"
             else
-                worker_log "✅ Domain completed: $domain"
+                worker_log "Domain completed: $domain"
             fi
-            update_checkpoint_domain "$domain" "true" "$worker_id"
         else
             failed_count=$((failed_count + 1))
             if [[ -n "$mad_mode" ]]; then
-                worker_log "❌ MAD analysis failed: $domain"
+                worker_log "MAD analysis failed: $domain"
             else
-                worker_log "❌ Domain failed: $domain"
+                worker_log "Domain failed: $domain"
             fi
-            update_checkpoint_domain "$domain" "false" "$worker_id"
         fi
     done
     
-    worker_log "🎉 Worker $worker_id completed: $success_count successful, $failed_count failed"
+    worker_log "Worker $worker_id completed: $success_count successful, $failed_count failed"
     echo "$success_count $failed_count" > "$worker_output_dir/worker_${worker_id}_stats.txt"
 }
 
@@ -685,7 +496,7 @@ aggregate_parallel_results() {
     local final_csv="$2"
     local interface_suffix="$3"
     
-    log "📊 Aggregating results from parallel workers..."
+    log "Aggregating results from parallel workers..."
     
     # Find all worker CSV files
     local worker_csvs=($(find "$worker_output_dir" -name "worker_*_results.csv" | sort))
@@ -701,7 +512,7 @@ aggregate_parallel_results() {
     local first_csv="${worker_csvs[0]}"
     if [[ -f "$first_csv" ]]; then
         head -n 1 "$first_csv" > "$final_csv"
-        log "📄 Created final CSV header: $final_csv"
+        log "Created final CSV header: $final_csv"
     fi
     
     # Aggregate data from all workers
@@ -712,7 +523,7 @@ aggregate_parallel_results() {
             
             if [[ $data_lines -gt 0 ]]; then
                 tail -n +2 "$worker_csv" >> "$final_csv"
-                log "  📝 Merged $data_lines results from worker $worker_id"
+                log "  Merged $data_lines results from worker $worker_id"
             fi
             
             # Get worker stats
@@ -725,11 +536,11 @@ aggregate_parallel_results() {
         fi
     done
     
-    log "📊 Aggregation complete: $total_success successful, $total_failed failed"
-    log "📁 Final results: $final_csv"
+    log "Aggregation complete: $total_success successful, $total_failed failed"
+    log "Final results: $final_csv"
     
     # Cleanup worker files
-    log "🧹 Cleaning up worker files..."
+    log "Cleaning up worker files..."
     rm -f "$worker_output_dir"/worker_*.csv
     rm -f "$worker_output_dir"/worker_*_stats.txt
     rm -f "$worker_output_dir"/chunk_*.txt
@@ -740,8 +551,8 @@ run_parallel_scan() {
     local interface="$1" 
     local migrate_interface="$2"
     
-    log "🚀 Starting parallel scan with $PARALLEL_JOBS workers"
-    log "🔧 Interface: $interface${migrate_interface:+ -> $migrate_interface}"
+    log "Starting parallel scan with $PARALLEL_JOBS workers"
+    log "Interface: $interface${migrate_interface:+ -> $migrate_interface}"
     
     # Create worker output directory
     local worker_output_dir="$TIMESTAMPED_OUTPUT_DIR/parallel_workers"
@@ -753,7 +564,7 @@ run_parallel_scan() {
     local actual_workers=${#chunk_files[@]}
     
     if [[ $actual_workers -lt $PARALLEL_JOBS ]]; then
-        log "📊 Adjusted to $actual_workers workers (fewer than requested due to domain count)"
+        log "Adjusted to $actual_workers workers (fewer than requested due to domain count)"
     fi
     
     # Generate random ports for each worker
@@ -767,7 +578,7 @@ run_parallel_scan() {
         worker_ports+=("$port")
     done
     
-    log "🔌 Generated worker ports: ${worker_ports[*]}"
+    log "Generated worker ports: ${worker_ports[*]}"
     
     # Start parallel workers
     local worker_pids=()
@@ -776,21 +587,21 @@ run_parallel_scan() {
         local chunk_file="${chunk_files[$i]}"
         local worker_port="${worker_ports[$i]}"
         
-        log "🚀 Starting worker $worker_id (port $worker_port, chunk: $(basename "$chunk_file"))"
+        log "Starting worker $worker_id (port $worker_port, chunk: $(basename "$chunk_file"))"
         
         # Run worker in background
         run_parallel_worker "$worker_id" "$chunk_file" "$interface" "$migrate_interface" "$worker_port" "$worker_output_dir" "$MAD_MODE" "$MAD_TARGET_RUNS" &
         worker_pids+=($!)
     done
     
-    log "⏳ Waiting for $actual_workers parallel workers to complete..."
+    log "Waiting for $actual_workers parallel workers to complete..."
     
     # Wait for all workers to complete
     local completed=0
     for pid in "${worker_pids[@]}"; do
         if wait "$pid"; then
             completed=$((completed + 1))
-            log "✅ Worker completed successfully ($completed/$actual_workers)"
+            log "Worker completed successfully ($completed/$actual_workers)"
         else
             error_log "Worker failed (PID: $pid)"
         fi
@@ -806,14 +617,14 @@ run_parallel_scan() {
     
     # If MAD mode, use MAD-specific aggregation, otherwise use regular aggregation
     if [[ -n "$MAD_MODE" ]] || [[ "$NUM_RUNS" == "mad_3" ]] || [[ "$NUM_RUNS" == "mad_5" ]]; then
-        log "🔄 Running MAD mode merge (MAD_MODE='$MAD_MODE', NUM_RUNS='$NUM_RUNS')"
+        log "Running MAD mode merge (MAD_MODE='$MAD_MODE', NUM_RUNS='$NUM_RUNS')"
         merge_worker_averages "$TIMESTAMPED_OUTPUT_DIR" "$interface" "$migrate_interface"
     else
         local final_csv="${CSV_FILE}_${interface_suffix}.csv"
         aggregate_parallel_results "$worker_output_dir" "$final_csv" "$interface_suffix"
     fi
     
-    log "🎉 Parallel scan completed with $actual_workers workers"
+    log "Parallel scan completed with $actual_workers workers"
 }
 
 # ── Proxy Management ─────────────────────────────────────────────────────────
@@ -822,9 +633,9 @@ start_proxy() {
     local migrate_interface="$2"
     
     if [[ -n "$migrate_interface" ]]; then
-        log "🚀 Starting QUIC proxy ($interface -> $migrate_interface migration)..."
+        log "Starting QUIC proxy ($interface -> $migrate_interface migration)..."
     else
-        log "🚀 Starting QUIC proxy ($interface)..."
+        log "Starting QUIC proxy ($interface)..."
     fi
     
     # Kill any existing proxy processes (including Rust processes)
@@ -859,9 +670,9 @@ start_proxy() {
     if pgrep -f "quiche_server" > /dev/null; then
         ACTUAL_PID=$(pgrep -f "quiche_server")
         if [[ -n "$migrate_interface" ]]; then
-            log "✅ Proxy started successfully with $interface -> $migrate_interface migration (Script PID: $PROXY_PID, Server PID: $ACTUAL_PID)"
+            log "Proxy started successfully with $interface -> $migrate_interface migration (Script PID: $PROXY_PID, Server PID: $ACTUAL_PID)"
         else
-            log "✅ Proxy started successfully with $interface (Script PID: $PROXY_PID, Server PID: $ACTUAL_PID)"
+            log "Proxy started successfully with $interface (Script PID: $PROXY_PID, Server PID: $ACTUAL_PID)"
         fi
         return 0
     else
@@ -883,7 +694,7 @@ start_proxy() {
 }
 
 stop_proxy() {
-    log "🛑 Stopping QUIC proxy..."
+    log "Stopping QUIC proxy..."
     
     # Kill all proxy-related processes
     pkill -f "script_proxy.sh" 2>/dev/null || true
@@ -901,14 +712,14 @@ stop_proxy() {
         # Kill web server port (9090)
         local web_pids=$(lsof -ti:9090 2>/dev/null || true)
         if [[ -n "$web_pids" ]]; then
-            log "🔌 Killing web server processes on port 9090"
+            log "Killing web server processes on port 9090"
             kill -9 $web_pids 2>/dev/null || true
         fi
         
         # Kill main proxy port (4433)
         local proxy_pids=$(lsof -ti:4433 2>/dev/null || true)
         if [[ -n "$proxy_pids" ]]; then
-            log "🔌 Killing proxy processes on port 4433"
+            log "Killing proxy processes on port 4433"
             kill -9 $proxy_pids 2>/dev/null || true
         fi
     fi
@@ -920,7 +731,7 @@ stop_proxy() {
         # Final aggressive cleanup
         pkill -9 -f "quiche_server" 2>/dev/null || true
     else
-        log "✅ Proxy stopped"
+        log "Proxy stopped"
     fi
 }
 
@@ -1142,19 +953,39 @@ parse_csv_run_data() {
     
     local sni="${fields[0]}"
     local ip_addr="${fields[1]}" 
-    local status_code="${fields[3]}"
-    local load_time="${fields[7]}"
-    local total_data="${fields[22]}"      # total_data_amount column
-    local migrated_data="${fields[23]}"   # total_migrated_data_amount column
-    local migrated_domains="${fields[33]}" # migrated_domains column
+    local status_code="${fields[2]}"      # first_status_code column
+    local load_time="${fields[9]}"        # load_time column
+    local total_data="${fields[24]}"      # total_data_amount column
+    local migrated_data="${fields[25]}"   # total_migrated_data_amount column
+    local migrated_domains="${fields[35]}" # migrated_domains column
     
     # Validate critical fields
-    if [[ "$status_code" == "-" || "$status_code" == "FAILED" || -z "$status_code" ]]; then
+    if [[ "$status_code" == "-" || "$status_code" == "FAILED" || "$status_code" == "failed to lookup address" || -z "$status_code" ]]; then
         echo "NO_200"
         return 1
     fi
     
-    if [[ "$status_code" != "200" ]]; then
+    # Accept 200 OK, 301/302 redirects, and "undefined" (which means successful redirect)
+    local redirected_status="${fields[5]}"  # redirected_status_code column
+    if [[ "$status_code" == "200" ]]; then
+        # Direct 200 response is valid
+        true
+    elif [[ "$status_code" == "301" || "$status_code" == "302" ]]; then
+        # Redirect codes need successful final status
+        if [[ "$redirected_status" != "200" && "$redirected_status" != "-" ]]; then
+            echo "NO_200"  
+            return 1
+        fi
+    elif [[ "$status_code" == "undefined" ]]; then
+        # "undefined" status typically means successful redirect without initial status
+        # Check if there's a redirected domain (meaning redirect happened successfully)
+        local redirected_domain="${fields[3]}"
+        if [[ "$redirected_domain" == "-" || -z "$redirected_domain" ]]; then
+            echo "NO_200"  
+            return 1
+        fi
+    else
+        # All other status codes are considered failures
         echo "NO_200"
         return 1
     fi
@@ -1165,9 +996,14 @@ parse_csv_run_data() {
         return 1
     fi
     
+    # For total_data, treat "-" as 0 for valid connections (redirects might not have data metrics)
     if [[ "$total_data" == "-" || -z "$total_data" ]]; then
-        echo "INVALID_TOTAL_DATA"
-        return 1
+        total_data="0"
+    fi
+    
+    # For migrated_data, treat "-" as 0 (expected for baseline or non-migrating connections)
+    if [[ "$migrated_data" == "-" || -z "$migrated_data" ]]; then
+        migrated_data="0"
     fi
     
     # Handle phase-specific data
@@ -1293,6 +1129,7 @@ process_migrated_domains() {
 }
 
 # MAD-based domain testing with baseline and migration phases
+# QUICK SCAN MODE: Optimized for speed - calculates medians only, skips averages and unstable tracking
 test_domain_mad() {
     local domain="$1"
     local index="$2"
@@ -1302,7 +1139,7 @@ test_domain_mad() {
     local worker_id="${6:-""}"
     local worker_port="${7:-""}"
     
-    log "🔍 [$index] Starting MAD analysis for: $domain (target: $target_runs runs per phase)"
+    log "[$index] Starting MAD analysis for: $domain (target: $target_runs runs per phase)"
     
     # Create phase-specific CSV files
     local worker_suffix=""
@@ -1316,22 +1153,23 @@ test_domain_mad() {
     
     local baseline_csv="${worker_dir}/baseline_run_${interface}${worker_suffix}.csv"
     local migration_csv="${worker_dir}/migration_run_${interface}_to_${migrate_interface}${worker_suffix}.csv"
-    local avg_results_csv="${worker_dir}/${TIMESTAMP}_averages${worker_suffix}.csv"
+    # QUICK SCAN: DISABLED averages worker files only
+    # local avg_results_csv="${worker_dir}/${TIMESTAMP}_averages${worker_suffix}.csv"
     local unstable_csv="${worker_dir}/${TIMESTAMP}_unstable_domains${worker_suffix}.csv"
     
-    # Create average results CSV header if it doesn't exist
-    if [[ ! -f "$avg_results_csv" ]]; then
-        echo "SNI,ip_addr,main_first_status,median_load_time_only,avg_load_time_only,median_total_data_amount_only,avg_total_data_amount_only,median_load_time_migrated,avg_load_time_migrated,median_total_data_amount_migrated,avg_total_data_amount_migrated,migrated_domains_averaged,dominant_migrated_domain" > "$avg_results_csv"
-    fi
+    # QUICK SCAN: Skip averages CSV creation
+    # if [[ ! -f "$avg_results_csv" ]]; then
+    #     echo "SNI,ip_addr,main_first_status,median_load_time_only,median_total_data_amount_only,median_load_time_migrated,median_total_data_amount_migrated" > "$avg_results_csv"
+    # fi
     
-    # Create unstable domains CSV header if it doesn't exist  
-    if [[ ! -f "$unstable_csv" ]]; then
-        echo "SNI,phase,reason,attempted_runs" > "$unstable_csv"
-    fi
+    # QUICK SCAN: Disabled unstable domains tracking for speed
+    # if [[ ! -f "$unstable_csv" ]]; then
+    #     echo "SNI,phase,reason,attempted_runs" > "$unstable_csv"
+    # fi
     
     # Initialize consolidated worker CSV files with headers (they will accumulate all runs)
     # We'll get the header from the first successful run and then append all subsequent runs    # ── Phase 1: Baseline (no migration) ──
-    log "📊 [$index] Phase 1: Baseline analysis for $domain"
+    log "[$index] Phase 1: Baseline analysis for $domain"
     
     # Temporarily disable migration for baseline
     local original_migrate="$migrate_interface"
@@ -1344,14 +1182,22 @@ test_domain_mad() {
     local baseline_data_amounts=()
     local baseline_ips=()
     local attempts=0
-    local max_attempts=$((target_runs + 15))
+    # Set max attempts: MAD_3=6, MAD_5=8
+    local max_attempts
+    if [[ $target_runs -eq 3 ]]; then
+        max_attempts=6
+    elif [[ $target_runs -eq 5 ]]; then
+        max_attempts=8
+    else
+        max_attempts=$((target_runs * 2))  # Fallback for other values
+    fi
     local consecutive_failures=0
     local max_consecutive_failures=$target_runs  # Stop after target_runs consecutive failures (MAD_3=3, MAD_5=5)
     local non_200_count=0  # Track all non-200 responses
     
     while [[ ${#baseline_results[@]} -lt $target_runs && $attempts -lt $max_attempts && $consecutive_failures -lt $max_consecutive_failures ]]; do
         attempts=$((attempts + 1))
-        log "  🔄 [$index] Baseline run $attempts for $domain"
+        log "  [$index] Baseline run $attempts for $domain"
         
         # Start fresh proxy for each run
         if [[ -n "$worker_port" ]]; then
@@ -1369,7 +1215,7 @@ test_domain_mad() {
         fi
         
         # Run test and append to consolidated baseline CSV file
-        cd "$HOME/Workspace/headless_chromium"
+        cd "$CLIENT_SCRIPT_DIR"
         if [[ -n "$worker_port" ]]; then
             # Use worker-specific proxy port and report port
             local report_port=$((9090 + worker_id * 10))
@@ -1403,20 +1249,20 @@ test_domain_mad() {
                 baseline_ips+=("$ip_addr")
                 consecutive_failures=0  # Reset consecutive failure counter on success
                 
-                log "  ✅ [$index] Baseline run $attempts successful: load_time=$load_time, data=$total_data"
+                log "  [$index] Baseline run $attempts successful: load_time=$load_time, data=$total_data"
             else
                 consecutive_failures=$((consecutive_failures + 1))
-                log "  ❌ [$index] Baseline run $attempts failed: $parse_result (consecutive failures: $consecutive_failures)"
+                log "  [$index] Baseline run $attempts failed: $parse_result (consecutive failures: $consecutive_failures)"
                 
                 # Track all non-200 responses (redirects, errors, etc.)
                 if [[ "$parse_result" == "NO_200" ]]; then
                     non_200_count=$((non_200_count + 1))
-                    log "  ⚠️  [$index] Non-200 response detected ($non_200_count so far)"
+                    log "  [$index] Non-200 response detected ($non_200_count so far)"
                     
                     # If we've seen target_runs non-200 responses, stop early
                     if [[ $non_200_count -ge $target_runs ]]; then
-                        log "❌ [$index] Domain $domain consistently returns non-200 responses ($non_200_count non-200 responses) - treating as failure"
-                        echo "$domain,baseline,consecutive_failures_3,$attempts" >> "$unstable_csv"
+                        log "[$index] Domain $domain consistently returns non-200 responses ($non_200_count non-200 responses) - treating as failure"
+                        # echo "$domain,baseline,consecutive_failures_3,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
                         
                         # Restore migration settings before returning
                         migrate_interface="$original_migrate"
@@ -1427,12 +1273,12 @@ test_domain_mad() {
                 
                 # Check for specific connection failure patterns for early termination
                 if [[ "$parse_result" == *"connection refused"* ]]; then
-                    log "  ⚠️  [$index] Connection-level failure detected for $domain"
+                    log "  [$index] Connection-level failure detected for $domain"
                 fi
             fi
         else
             consecutive_failures=$((consecutive_failures + 1))
-            log "  ❌ [$index] Baseline run $attempts timed out or failed (consecutive failures: $consecutive_failures)"
+            log "  [$index] Baseline run $attempts timed out or failed (consecutive failures: $consecutive_failures)"
         fi
         
         if [[ -n "$worker_port" ]]; then
@@ -1445,21 +1291,21 @@ test_domain_mad() {
     
     # Check if we stopped due to consecutive failures
     if [[ $consecutive_failures -ge $max_consecutive_failures ]]; then
-        log "❌ [$index] Too many consecutive failures ($consecutive_failures) for $domain - domain appears unreachable"
-        echo "$domain,baseline,consecutive_failures_${consecutive_failures},$attempts" >> "$unstable_csv"
+        log "[$index] Too many consecutive failures ($consecutive_failures) for $domain - domain appears unreachable"
+        # echo "$domain,baseline,consecutive_failures_${consecutive_failures},$attempts" >> "$unstable_csv"  # DISABLED for quick scan
         return 1
     fi
     
     # Check if we have enough baseline runs
     if [[ ${#baseline_results[@]} -eq 0 ]]; then
-        log "❌ [$index] No successful baseline runs for $domain - skipping migration analysis (all connection failures or errors)"
-        echo "$domain,baseline,no_200_responses,$attempts" >> "$unstable_csv"
+        log "[$index] No successful baseline runs for $domain - skipping migration analysis (all connection failures or errors)"
+        # echo "$domain,baseline,no_200_responses,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
         return 1
     fi
     
     if [[ ${#baseline_results[@]} -lt $target_runs ]]; then
-        log "❌ [$index] Insufficient baseline runs for $domain: ${#baseline_results[@]}/$target_runs"
-        echo "$domain,baseline,insufficient_runs_${#baseline_results[@]}_of_$target_runs,$attempts" >> "$unstable_csv"
+        log "[$index] Insufficient baseline runs for $domain: ${#baseline_results[@]}/$target_runs"
+        # echo "$domain,baseline,insufficient_runs_${#baseline_results[@]}_of_$target_runs,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
         return 1
     fi
     
@@ -1480,19 +1326,19 @@ test_domain_mad() {
     done
     
     if [[ $meaningful_runs -eq 0 ]]; then
-        log "❌ [$index] No meaningful HTTP responses for $domain (all connection failures or errors)"
-        echo "$domain,baseline,no_meaningful_responses,$attempts" >> "$unstable_csv"
+        log "[$index] No meaningful HTTP responses for $domain (all connection failures or errors)"
+        # echo "$domain,baseline,no_meaningful_responses,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
         return 1
     fi
     
     if [[ $meaningful_runs -lt 2 ]]; then
-        log "⚠️  [$index] Only $meaningful_runs meaningful responses for $domain - insufficient for migration analysis"
-        echo "$domain,baseline,insufficient_meaningful_responses_${meaningful_runs},$attempts" >> "$unstable_csv"
+        log "[$index] Only $meaningful_runs meaningful responses for $domain - insufficient for migration analysis"
+        # echo "$domain,baseline,insufficient_meaningful_responses_${meaningful_runs},$attempts" >> "$unstable_csv"  # DISABLED for quick scan
         return 1
     fi
     
     # Apply MAD filtering to baseline data amounts
-    log "📈 [$index] Applying MAD filtering to baseline data amounts..."
+    log "[$index] Applying MAD filtering to baseline data amounts..."
     local valid_indices=$(calculate_mad_outliers "${baseline_data_amounts[@]}")
     local valid_baseline_results=()
     local valid_baseline_load_times=()
@@ -1507,7 +1353,7 @@ test_domain_mad() {
     # If we don't have enough valid runs after MAD filtering, collect more
     while [[ ${#valid_baseline_results[@]} -lt $target_runs && $attempts -lt $max_attempts ]]; do
         attempts=$((attempts + 1))
-        log "  🔄 [$index] Additional baseline run $attempts (MAD filtering) for $domain"
+        log "  [$index] Additional baseline run $attempts (MAD filtering) for $domain"
         
         if [[ -n "$worker_port" ]]; then
             if ! start_proxy_worker "$interface" "" "$worker_port" "$worker_id" "$(dirname "$LOG_FILE")"; then
@@ -1522,7 +1368,7 @@ test_domain_mad() {
         fi
         
         # Run additional baseline test and append to consolidated baseline CSV
-        cd "$HOME/Workspace/headless_chromium"
+        cd "$CLIENT_SCRIPT_DIR"
         if [[ -n "$worker_port" ]]; then
             # Use worker-specific proxy port and report port
             local report_port=$((9090 + worker_id * 10))
@@ -1565,7 +1411,7 @@ test_domain_mad() {
                     valid_baseline_data_amounts+=("${baseline_data_amounts[$idx]}")
                 done
                 
-                log "  ✅ [$index] Additional baseline run successful: valid=${#valid_baseline_results[@]}/$target_runs"
+                log "  [$index] Additional baseline run successful: valid=${#valid_baseline_results[@]}/$target_runs"
             fi
         fi
         
@@ -1578,8 +1424,8 @@ test_domain_mad() {
     done
     
     if [[ ${#valid_baseline_results[@]} -lt $target_runs ]]; then
-        log "❌ [$index] Cannot collect $target_runs valid baseline runs for $domain after $attempts attempts"
-        echo "$domain,baseline,mad_filtering_failed_${#valid_baseline_results[@]}_valid_of_$target_runs,$attempts" >> "$unstable_csv"
+        log "[$index] Cannot collect $target_runs valid baseline runs for $domain after $attempts attempts"
+        # echo "$domain,baseline,mad_filtering_failed_${#valid_baseline_results[@]}_valid_of_$target_runs,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
         return 1
     fi
     
@@ -1589,25 +1435,25 @@ test_domain_mad() {
     
     # Ensure we never use more than target_runs results (limit to exactly 3 for MAD_3)
     if [[ ${#final_baseline_load_times[@]} -gt $target_runs ]]; then
-        log "🔧 [$index] Limiting baseline results to target_runs ($target_runs): ${#final_baseline_load_times[@]} -> $target_runs"
+        log "[$index] Limiting baseline results to target_runs ($target_runs): ${#final_baseline_load_times[@]} -> $target_runs"
         # Keep only the first target_runs results to ensure consistency
         final_baseline_load_times=("${final_baseline_load_times[@]:0:$target_runs}")
         final_baseline_data_amounts=("${final_baseline_data_amounts[@]:0:$target_runs}")
     fi
     
-    # Calculate baseline statistics
+    # Calculate baseline statistics (QUICK SCAN: using only medians)
     local baseline_median_load=$(calculate_median "${final_baseline_load_times[@]}")
-    local baseline_avg_load=$(calculate_mean "${final_baseline_load_times[@]}")
+    # local baseline_avg_load=$(calculate_mean "${final_baseline_load_times[@]}")  # DISABLED for quick scan
     local baseline_median_data=$(calculate_median "${final_baseline_data_amounts[@]}")
-    local baseline_avg_data=$(calculate_mean "${final_baseline_data_amounts[@]}")
+    # local baseline_avg_data=$(calculate_mean "${final_baseline_data_amounts[@]}")  # DISABLED for quick scan
     
     # Get unique IPs
     local unique_ips=$(printf "%s\n" "${baseline_ips[@]}" | sort -u | tr '\n' ';' | sed 's/;$//')
     
-    log "📊 [$index] Baseline stats for $domain: med_load=$baseline_median_load, avg_load=$baseline_avg_load, med_data=$baseline_median_data, avg_data=$baseline_avg_data"
+    log "[$index] Baseline stats for $domain: med_load=$baseline_median_load, med_data=$baseline_median_data (QUICK SCAN: averages disabled)"
     
     # ── Phase 2: Enhanced Migration Analysis with Conditional Strategy ──
-    log "📊 [$index] Phase 2: Enhanced migration analysis for $domain (conditional strategy)"
+    log "[$index] Phase 2: Enhanced migration analysis for $domain (conditional strategy)"
     
     # Restore migration settings
     migrate_interface="$original_migrate"
@@ -1621,11 +1467,11 @@ test_domain_mad() {
     attempts=0
     
     # Stage 1: Initial migration capability detection
-    log "  🔍 [$index] Stage 1: Testing migration capability for $domain"
+    log "  [$index] Stage 1: Testing migration capability for $domain"
     
     while [[ ${#migration_results[@]} -lt $target_runs && $attempts -lt $max_attempts ]]; do
         attempts=$((attempts + 1))
-        log "    🔄 [$index] Initial migration run $attempts for $domain"
+        log "    [$index] Initial migration run $attempts for $domain"
         
         # Start fresh proxy with migration
         if [[ -n "$worker_port" ]]; then
@@ -1641,7 +1487,7 @@ test_domain_mad() {
         fi
         
         # Run test and append to consolidated migration CSV file
-        cd "$HOME/Workspace/headless_chromium"
+        cd "$CLIENT_SCRIPT_DIR"
         if [[ -n "$worker_port" ]]; then
             # Use worker-specific proxy port and report port
             local report_port=$((9090 + worker_id * 10))
@@ -1680,15 +1526,15 @@ test_domain_mad() {
                 # Check if this run has actual migration data
                 if [[ -n "$migrated_data_amount" && $(echo "$migrated_data_amount > 0" | bc -l) == "1" ]]; then
                     migration_has_data=true
-                    log "    ✅ [$index] Migration run $attempts with actual data: ${migrated_data_amount} bytes migrated"
+                    log "    [$index] Migration run $attempts with actual data: ${migrated_data_amount} bytes migrated"
                 else
-                    log "    📝 [$index] Migration run $attempts with no migration: ${migrated_data_amount:-0} bytes"
+                    log "    [$index] Migration run $attempts with no migration: ${migrated_data_amount:-0} bytes"
                 fi
             else
-                log "    ❌ [$index] Migration run $attempts failed: $parse_result"
+                log "    [$index] Migration run $attempts failed: $parse_result"
             fi
         else
-            log "    ❌ [$index] Migration run $attempts timed out or failed"
+            log "    [$index] Migration run $attempts timed out or failed"
         fi
         
         if [[ -n "$worker_port" ]]; then
@@ -1701,17 +1547,17 @@ test_domain_mad() {
     
     # Stage 2: Check migration capability and decide strategy
     if [[ ${#migration_results[@]} -eq 0 ]]; then
-        log "❌ [$index] No successful migration runs for $domain"
-        echo "$domain,migration,no_valid_migration_responses,$attempts" >> "$unstable_csv"
-        # Still save baseline results
-        echo "$domain,$unique_ips,200,$baseline_median_load,$baseline_avg_load,$baseline_median_data,$baseline_avg_data,-,-,-,-,-,-" >> "$avg_results_csv"
+        log "[$index] No successful migration runs for $domain"
+        # echo "$domain,migration,no_valid_migration_responses,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
+        # QUICK SCAN: Averages CSV output DISABLED for speed
+        # echo "$domain,$unique_ips,200,$baseline_median_load,$baseline_median_data,-,-" >> /dev/null
         return 0
     fi
     
     if [[ "$migration_has_data" == "false" ]]; then
         # No migration capability detected - handle non-migration case
-        log "⚠️  [$index] Domain $domain doesn't support migration: all ${#migration_results[@]} runs had migrated_data=0"
-        echo "$domain,migration,no_migration_support_all_runs_zero_migration,$attempts" >> "$unstable_csv"
+        log "[$index] Domain $domain doesn't support migration: all ${#migration_results[@]} runs had migrated_data=0"
+        # echo "$domain,migration,no_migration_support_all_runs_zero_migration,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
         
         # Still calculate stats from non-migrated runs (they're valid performance data)
         local final_migration_load_times=("${migration_load_times[@]}")
@@ -1725,24 +1571,25 @@ test_domain_mad() {
             final_migration_migrated_domains=("${final_migration_migrated_domains[@]:0:$target_runs}")
         fi
         
-        # Calculate stats and save (will show migration_data=0 but valid timing data)
+        # Calculate stats and save (QUICK SCAN: using only medians)
         local migration_median_load=$(calculate_median "${final_migration_load_times[@]}")
-        local migration_avg_load=$(calculate_mean "${final_migration_load_times[@]}")
+        # local migration_avg_load=$(calculate_mean "${final_migration_load_times[@]}")  # DISABLED for quick scan
         local migration_median_data=$(calculate_median "${final_migration_data_amounts[@]}")
-        local migration_avg_data=$(calculate_mean "${final_migration_data_amounts[@]}")
+        # local migration_avg_data=$(calculate_mean "${final_migration_data_amounts[@]}")  # DISABLED for quick scan
         
-        echo "$domain,$unique_ips,200,$baseline_median_load,$baseline_avg_load,$baseline_median_data,$baseline_avg_data,$migration_median_load,$migration_avg_load,$migration_median_data,$migration_avg_data,no_migration_support,-" >> "$avg_results_csv"
-        log "✅ [$index] Saved no-migration results for $domain"
+        # QUICK SCAN: Averages CSV output DISABLED for speed
+        # echo "$domain,$unique_ips,200,$baseline_median_load,$baseline_median_data,$migration_median_load,$migration_median_data" >> /dev/null
+        log "[$index] Saved no-migration results for $domain"
         return 0
     fi
     
     # Stage 3: Migration capability detected - collect full target_runs with MAD filtering
-    log "  🎯 [$index] Stage 2: Migration capability detected - collecting $target_runs quality runs"
+    log "  [$index] Stage 2: Migration capability detected - collecting $target_runs quality runs"
     
     # Continue collecting if we don't have enough runs yet
     while [[ ${#migration_results[@]} -lt $target_runs && $attempts -lt $max_attempts ]]; do
         attempts=$((attempts + 1))
-        log "    🔄 [$index] Additional migration run $attempts for $domain"
+        log "    [$index] Additional migration run $attempts for $domain"
         
         if [[ -n "$worker_port" ]]; then
             if ! start_proxy_worker "$interface" "$migrate_interface" "$worker_port" "$worker_id" "$(dirname "$LOG_FILE")"; then
@@ -1756,7 +1603,7 @@ test_domain_mad() {
             fi
         fi
         
-        cd "$HOME/Workspace/headless_chromium"
+        cd "$CLIENT_SCRIPT_DIR"
         if [[ -n "$worker_port" ]]; then
             local report_port=$((9090 + worker_id * 10))
             if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --proxy-port="$worker_port" --report-port="$report_port" --csv="$migration_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
@@ -1785,7 +1632,7 @@ test_domain_mad() {
                 migration_data_amounts+=("$total_data")
                 migration_migrated_domains+=("$migrated_domains")
                 
-                log "    ✅ [$index] Additional migration run $attempts successful"
+                log "    [$index] Additional migration run $attempts successful"
             fi
         fi
         
@@ -1798,12 +1645,12 @@ test_domain_mad() {
     done
     
     if [[ ${#migration_results[@]} -lt $target_runs ]]; then
-        log "⚠️  [$index] Insufficient migration runs for $domain: ${#migration_results[@]}/$target_runs"
-        echo "$domain,migration,insufficient_runs_${#migration_results[@]}_of_$target_runs,$attempts" >> "$unstable_csv"
+        log "[$index] Insufficient migration runs for $domain: ${#migration_results[@]}/$target_runs"
+        # echo "$domain,migration,insufficient_runs_${#migration_results[@]}_of_$target_runs,$attempts" >> "$unstable_csv"  # DISABLED for quick scan
     fi
     
     # Stage 4: Apply MAD filtering ONLY to runs with migrated_data > 0
-    log "  📊 [$index] Stage 3: Applying MAD filtering to migration-capable runs only"
+    log "  [$index] Stage 3: Applying MAD filtering to migration-capable runs only"
     
     # Separate runs into migration-capable and non-capable
     local migration_capable_indices=()
@@ -1826,11 +1673,11 @@ test_domain_mad() {
         fi
     done
     
-    log "    📈 Found ${#migration_capable_indices[@]} migration-capable runs out of ${#migration_results[@]} total"
+    log "    Found ${#migration_capable_indices[@]} migration-capable runs out of ${#migration_results[@]} total"
     
     if [[ ${#migration_capable_indices[@]} -lt 2 ]]; then
         # Not enough migration-capable runs for MAD analysis - use all available runs
-        log "    ⚠️  Not enough migration-capable runs for MAD analysis (${#migration_capable_indices[@]} < 2)"
+        log "    Not enough migration-capable runs for MAD analysis (${#migration_capable_indices[@]} < 2)"
         local final_indices=()
         for ((i=0; i<${#migration_results[@]}; i++)); do
             final_indices+=("$i")
@@ -1845,16 +1692,16 @@ test_domain_mad() {
             mad_valid_absolute+=("$absolute_idx")
         done
         
-        log "    📊 MAD filtering: ${#mad_valid_absolute[@]} valid runs from ${#migration_capable_indices[@]} migration-capable runs"
+        log "    MAD filtering: ${#mad_valid_absolute[@]} valid runs from ${#migration_capable_indices[@]} migration-capable runs"
         
         # If MAD filtered out too many migration-capable runs, collect more
         local needed_runs=$((target_runs - ${#mad_valid_absolute[@]}))
         if [[ $needed_runs -gt 0 && $attempts -lt $max_attempts ]]; then
-            log "    🔄 Need $needed_runs more migration-capable runs (MAD filtering removed outliers)"
+            log "    Need $needed_runs more migration-capable runs (MAD filtering removed outliers)"
             
             while [[ $needed_runs -gt 0 && $attempts -lt $max_attempts ]]; do
                 attempts=$((attempts + 1))
-                log "      🔄 [$index] Replacement migration run $attempts for $domain"
+                log "      [$index] Replacement migration run $attempts for $domain"
                 
                 if [[ -n "$worker_port" ]]; then
                     if ! start_proxy_worker "$interface" "$migrate_interface" "$worker_port" "$worker_id" "$(dirname "$LOG_FILE")"; then
@@ -1866,7 +1713,7 @@ test_domain_mad() {
                     fi
                 fi
                 
-                cd "$HOME/Workspace/headless_chromium"
+                cd "$CLIENT_SCRIPT_DIR"
                 if [[ -n "$worker_port" ]]; then
                     local report_port=$((9090 + worker_id * 10))
                     if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --proxy-port="$worker_port" --report-port="$report_port" --csv="$migration_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
@@ -1906,9 +1753,9 @@ test_domain_mad() {
                             mad_valid_absolute+=("$new_index")
                             
                             needed_runs=$((needed_runs - 1))
-                            log "      ✅ Replacement run accepted (has migration data: ${migrated_data_amount} bytes)"
+                            log "      Replacement run accepted (has migration data: ${migrated_data_amount} bytes)"
                         else
-                            log "      ❌ Replacement run rejected (no migration data: ${migrated_data_amount:-0} bytes)"
+                            log "      Replacement run rejected (no migration data: ${migrated_data_amount:-0} bytes)"
                         fi
                     fi
                 fi
@@ -1938,34 +1785,34 @@ test_domain_mad() {
     
     # Limit to target_runs
     if [[ ${#final_migration_load_times[@]} -gt $target_runs ]]; then
-        log "🔧 [$index] Limiting migration results to target_runs ($target_runs): ${#final_migration_load_times[@]} -> $target_runs"
+        log "[$index] Limiting migration results to target_runs ($target_runs): ${#final_migration_load_times[@]} -> $target_runs"
         final_migration_load_times=("${final_migration_load_times[@]:0:$target_runs}")
         final_migration_data_amounts=("${final_migration_data_amounts[@]:0:$target_runs}")
         final_migration_migrated_domains=("${final_migration_migrated_domains[@]:0:$target_runs}")
     fi
     
-    # Calculate migration statistics
+    # Calculate migration statistics (QUICK SCAN: using only medians)
     local migration_median_load=$(calculate_median "${final_migration_load_times[@]}")
-    local migration_avg_load=$(calculate_mean "${final_migration_load_times[@]}")
+    # local migration_avg_load=$(calculate_mean "${final_migration_load_times[@]}")  # DISABLED for quick scan
     local migration_median_data=$(calculate_median "${final_migration_data_amounts[@]}")
-    local migration_avg_data=$(calculate_mean "${final_migration_data_amounts[@]}")
+    # local migration_avg_data=$(calculate_mean "${final_migration_data_amounts[@]}")  # DISABLED for quick scan
     
-    # Process migrated domains
-    local processed_domains_result=$(process_migrated_domains "${final_migration_migrated_domains[@]}")
-    IFS='~' read -ra domain_parts <<< "$processed_domains_result"
-    local all_migrated_domains="${domain_parts[0]:-}"
-    local dominant_domain="${domain_parts[1]:-}"
+    # QUICK SCAN: Skip complex domain processing for speed
+    # local processed_domains_result=$(process_migrated_domains "${final_migration_migrated_domains[@]}")
+    # IFS='~' read -ra domain_parts <<< "$processed_domains_result"
+    # local all_migrated_domains="${domain_parts[0]:-}"
+    # local dominant_domain="${domain_parts[1]:-}"
     
-    log "📊 [$index] Enhanced migration stats for $domain: med_load=$migration_median_load, avg_load=$migration_avg_load, med_data=$migration_median_data, avg_data=$migration_avg_data"
+    log "[$index] Enhanced migration stats for $domain: med_load=$migration_median_load, med_data=$migration_median_data"
     
-    # Save final results
-    echo "$domain,$unique_ips,200,$baseline_median_load,$baseline_avg_load,$baseline_median_data,$baseline_avg_data,$migration_median_load,$migration_avg_load,$migration_median_data,$migration_avg_data,$all_migrated_domains,$dominant_domain" >> "$avg_results_csv"
+    # QUICK SCAN: Averages CSV output DISABLED for speed
+    # echo "$domain,$unique_ips,200,$baseline_median_load,$baseline_median_data,$migration_median_load,$migration_median_data" >> /dev/null
     
-    log "✅ [$index] MAD analysis completed for $domain"
-    log "📊 [$index] Worker files created:"
+    log "[$index] MAD analysis completed for $domain"
+    log "[$index] Worker files created:"
     log "   - Baseline: $baseline_csv"
     log "   - Migration: $migration_csv"
-    log "   - Averages: $avg_results_csv" 
+    log "   - Averages: DISABLED for quick scan" 
     return 0
 }
 
@@ -1975,38 +1822,39 @@ merge_worker_averages() {
     local interface="$2"
     local migrate_interface="$3"
     
-    log "📊 Merging worker average files..."
+    log "Merging worker average files..."
     
     local timestamp=$(date +%Y%m%d_%H%M%S)
     local final_averages="${output_dir}/${timestamp}_final_averages.csv"
     local final_unstable="${output_dir}/${timestamp}_final_unstable_domains.csv"
     
-    # Create headers for final files
-    echo "SNI,ip_addr,main_first_status,median_load_time_only,avg_load_time_only,median_total_data_amount_only,avg_total_data_amount_only,median_load_time_migrated,avg_load_time_migrated,median_total_data_amount_migrated,avg_total_data_amount_migrated,migrated_domains_averaged,dominant_migrated_domain" > "$final_averages"
-    echo "SNI,phase,reason,attempted_runs" > "$final_unstable"
+    # QUICK SCAN: Skip final averages file creation (disabled)
+    # echo "SNI,ip_addr,main_first_status,median_load_time_only,median_total_data_amount_only,median_load_time_migrated,median_total_data_amount_migrated" > "$final_averages"
+    # echo "SNI,phase,reason,attempted_runs" > "$final_unstable"  # DISABLED for quick scan
     
     # Look for worker files in the parallel_workers directory
     local worker_dir="${output_dir}/parallel_workers"
     
-    # Merge all worker average files
+    # QUICK SCAN: Skip worker average files merging (disabled)
     local merged_count=0
-    for worker_avg in "$worker_dir"/*_averages_worker_*.csv; do
-        if [[ -f "$worker_avg" ]]; then
-            tail -n +2 "$worker_avg" >> "$final_averages"
-            merged_count=$((merged_count + 1))
-            log "  ✅ Merged averages from: $(basename "$worker_avg")"
-        fi
-    done
+    # for worker_avg in "$worker_dir"/*_averages_worker_*.csv; do
+    #     if [[ -f "$worker_avg" ]]; then
+    #         tail -n +2 "$worker_avg" >> "$final_averages"
+    #         merged_count=$((merged_count + 1))
+    #         log "  Merged averages from: $(basename "$worker_avg")"
+    #     fi
+    # done
     
-    # Merge all worker unstable domain files  
-    local unstable_count=0
-    for worker_unstable in "$worker_dir"/*_unstable_domains_worker_*.csv; do
-        if [[ -f "$worker_unstable" ]]; then
-            tail -n +2 "$worker_unstable" >> "$final_unstable"
-            unstable_count=$((unstable_count + 1))
-            log "  ✅ Merged unstable domains from: $(basename "$worker_unstable")"
-        fi
-    done
+    # QUICK SCAN: Skip unstable domains merging for speed
+    # local unstable_count=0
+    # for worker_unstable in "$worker_dir"/*_unstable_domains_worker_*.csv; do
+    #     if [[ -f "$worker_unstable" ]]; then
+    #         tail -n +2 "$worker_unstable" >> "$final_unstable"
+    #         unstable_count=$((unstable_count + 1))
+    #         log "  Merged unstable domains from: $(basename "$worker_unstable")"
+    #     fi
+    # done
+    local unstable_count=0  # Set to 0 since we're skipping this
     
     # Also merge phase-specific CSV files (final results go in main directory)
     local baseline_final="${output_dir}/baseline_result_${interface}.csv"
@@ -2043,13 +1891,12 @@ merge_worker_averages() {
         fi
     fi
     
-    log "📈 Final merge results:"
-    log "  - Average files merged: $merged_count workers"  
-    log "  - Unstable domain files merged: $unstable_count workers"
+    log "Final merge results (QUICK SCAN MODE):"
+    log "  - Averages worker files: DISABLED for speed (no *_averages_worker_*.csv generated)"  
+    log "  - Unstable domain tracking: DISABLED for speed"
     log "  - Baseline phase files merged: $baseline_merged workers → $baseline_final"
     log "  - Migration phase files merged: $migration_merged workers → $migration_final"
-    log "  - Final averages: $final_averages"
-    log "  - Final unstable domains: $final_unstable"
+    log "  - Individual baseline/migration CSV files: ENABLED"
 }
 
 # ── Client Testing ─────────────────────────────────────────────────────────────────────────────────────────
@@ -2059,26 +1906,26 @@ test_domain_no_proxy() {
     local index="$2"
     local suffix="$3"
     
-    log "🔍 [$index] Testing domain: $domain (direct connection, $NUM_RUNS runs)"
+    log "[$index] Testing domain: $domain (direct connection, $NUM_RUNS runs)"
     
     # Run multiple tests for this domain without proxy
     local success_count=0
     local run_number=1
     
-    cd "$HOME/Workspace/headless_chromium"
+    cd "$CLIENT_SCRIPT_DIR"
     
     while [[ $run_number -le $NUM_RUNS ]]; do
         if [[ $NUM_RUNS -gt 1 ]]; then
-            log "  🔄 [$index] Run $run_number/$NUM_RUNS for $domain (direct connection)"
+            log "  [$index] Run $run_number/$NUM_RUNS for $domain (direct connection)"
         fi
         
         # Execute the test without proxy
         local test_success=false
-        if timeout "$TIMEOUT" bash -c "cd '$HOME/Workspace/headless_chromium' && node '$CLIENT_SCRIPT' --csv='${CSV_FILE}_${suffix}.csv' --url='$domain'" 2>&1 | tee -a "$LOG_FILE"; then
+        if timeout "$TIMEOUT" bash -c "cd '$CLIENT_SCRIPT_DIR' && node '$CLIENT_SCRIPT' --csv='${CSV_FILE}_${suffix}.csv' --url='$domain'" 2>&1 | tee -a "$LOG_FILE"; then
             success_count=$((success_count + 1))
             test_success=true
             if [[ $NUM_RUNS -gt 1 ]]; then
-                log "  ✅ [$index] Run $run_number/$NUM_RUNS completed for $domain (direct connection)"
+                log "  [$index] Run $run_number/$NUM_RUNS completed for $domain (direct connection)"
             fi
         else
             if [[ $NUM_RUNS -gt 1 ]]; then
@@ -2096,7 +1943,7 @@ test_domain_no_proxy() {
     
     # Report overall success for this domain
     if [[ $success_count -gt 0 ]]; then
-        log "✅ [$index] Domain completed: $domain ($success_count/$NUM_RUNS successful runs, direct connection)"
+        log "[$index] Domain completed: $domain ($success_count/$NUM_RUNS successful runs, direct connection)"
     else
         error_log "All runs failed for $domain (direct connection)"
     fi
@@ -2115,9 +1962,9 @@ test_domain() {
     local migrate_interface="$4"
     
     if [[ -n "$migrate_interface" ]]; then
-        log "🔍 [$index] Testing domain: $domain (using $interface -> $migrate_interface migration, $NUM_RUNS runs)"
+        log "[$index] Testing domain: $domain (using $interface -> $migrate_interface migration, $NUM_RUNS runs)"
     else
-        log "🔍 [$index] Testing domain: $domain (using $interface, $NUM_RUNS runs)"
+        log "[$index] Testing domain: $domain (using $interface, $NUM_RUNS runs)"
     fi
     
     # Generate appropriate CSV filename
@@ -2132,14 +1979,14 @@ test_domain() {
     local success_count=0
     local run_number=1
     
-    cd "$HOME/Workspace/headless_chromium"
+    cd "$CLIENT_SCRIPT_DIR"
     
     while [[ $run_number -le $NUM_RUNS ]]; do
         if [[ $NUM_RUNS -gt 1 ]]; then
             if [[ -n "$migrate_interface" ]]; then
-                log "  🔄 [$index] Run $run_number/$NUM_RUNS for $domain (using $interface -> $migrate_interface migration) - Starting fresh proxy+client"
+                log "  [$index] Run $run_number/$NUM_RUNS for $domain (using $interface -> $migrate_interface migration) - Starting fresh proxy+client"
             else
-                log "  🔄 [$index] Run $run_number/$NUM_RUNS for $domain (using $interface) - Starting fresh proxy+client"
+                log "  [$index] Run $run_number/$NUM_RUNS for $domain (using $interface) - Starting fresh proxy+client"
             fi
         fi
         
@@ -2171,14 +2018,14 @@ test_domain() {
         
         # Execute the test with timeout against fresh proxy (ensure correct working directory)
         local test_success=false
-        if timeout "$TIMEOUT" bash -c "cd '$HOME/Workspace/headless_chromium' && node '$CLIENT_SCRIPT' --use-proxy --csv='${CSV_FILE}_${csv_suffix}.csv' --url='$domain'" 2>&1 | tee -a "$LOG_FILE"; then
+        if timeout "$TIMEOUT" bash -c "cd '$CLIENT_SCRIPT_DIR' && node '$CLIENT_SCRIPT' --use-proxy --csv='${CSV_FILE}_${csv_suffix}.csv' --url='$domain'" 2>&1 | tee -a "$LOG_FILE"; then
             success_count=$((success_count + 1))
             test_success=true
             if [[ $NUM_RUNS -gt 1 ]]; then
                 if [[ -n "$migrate_interface" ]]; then
-                    log "  ✅ [$index] Run $run_number/$NUM_RUNS completed for $domain (using $interface -> $migrate_interface migration)"
+                    log "  [$index] Run $run_number/$NUM_RUNS completed for $domain (using $interface -> $migrate_interface migration)"
                 else
-                    log "  ✅ [$index] Run $run_number/$NUM_RUNS completed for $domain (using $interface)"
+                    log "  [$index] Run $run_number/$NUM_RUNS completed for $domain (using $interface)"
                 fi
             fi
         else
@@ -2192,7 +2039,7 @@ test_domain() {
         fi
         
         # ALWAYS STOP PROXY AFTER EACH RUN
-        log "  🛑 Stopping proxy after run $run_number/$NUM_RUNS"
+        log "  Stopping proxy after run $run_number/$NUM_RUNS"
         stop_proxy
         
         # Small delay between runs (except for the last one)
@@ -2206,9 +2053,9 @@ test_domain() {
     # Report overall success for this domain
     if [[ $success_count -gt 0 ]]; then
         if [[ -n "$migrate_interface" ]]; then
-            log "✅ [$index] Domain completed: $domain ($success_count/$NUM_RUNS successful runs, using $interface -> $migrate_interface migration)"
+            log "[$index] Domain completed: $domain ($success_count/$NUM_RUNS successful runs, using $interface -> $migrate_interface migration)"
         else
-            log "✅ [$index] Domain completed: $domain ($success_count/$NUM_RUNS successful runs, using $interface)"
+            log "[$index] Domain completed: $domain ($success_count/$NUM_RUNS successful runs, using $interface)"
         fi
     else
         if [[ -n "$migrate_interface" ]]; then
@@ -2235,7 +2082,7 @@ run_scan_no_proxy() {
     # Apply start offset
     if [[ $START_FROM -gt 1 ]]; then
         domains=("${domains[@]:$((START_FROM-1))}")
-        log "📍 Starting from domain #$START_FROM (direct connection)"
+        log "Starting from domain #$START_FROM (direct connection)"
     fi
     
     # Apply max limit
@@ -2245,7 +2092,7 @@ run_scan_no_proxy() {
     fi
     
     local scan_count=${#domains[@]}
-    log "🎯 Scanning $scan_count domains using direct connection (total in file: $total_domains)"
+    log "Scanning $scan_count domains using direct connection (total in file: $total_domains)"
     
     # Sequential scanning
     local current=0
@@ -2253,21 +2100,21 @@ run_scan_no_proxy() {
         current=$((current + 1))
         local global_index=$((START_FROM + current - 1))
         
-        log "📊 Progress (direct): $current/$scan_count (Global: #$global_index) - $domain"
+        log "Progress (direct): $current/$scan_count (Global: #$global_index) - $domain"
         
         if test_domain_no_proxy "$domain" "$global_index" "$suffix"; then
-            log "✅ [$global_index] Completed: $domain (direct connection)"
+            log "[$global_index] Completed: $domain (direct connection)"
         else
             error_log "Failed: $domain (direct connection)"
         fi
         
         # Progress indicator
         if [[ $((current % 10)) -eq 0 ]]; then
-            log "🔄 Progress checkpoint (direct): $current/$scan_count domains completed"
+            log "Progress: $current/$scan_count domains completed"
         fi
     done
     
-    log "🎉 Completed all scans using direct connection"
+    log "Completed all scans using direct connection"
 }
 
 run_scan() {
@@ -2280,9 +2127,9 @@ run_scan() {
     if [[ $START_FROM -gt 1 ]]; then
         domains=("${domains[@]:$((START_FROM-1))}")
         if [[ -n "$migrate_interface" ]]; then
-            log "📍 Starting from domain #$START_FROM for $interface -> $migrate_interface migration"
+            log "Starting from domain #$START_FROM for $interface -> $migrate_interface migration"
         else
-            log "📍 Starting from domain #$START_FROM for $interface"
+            log "Starting from domain #$START_FROM for $interface"
         fi
     fi
     
@@ -2290,17 +2137,17 @@ run_scan() {
     if [[ $MAX_DOMAINS -gt 0 && $MAX_DOMAINS -lt ${#domains[@]} ]]; then
         domains=("${domains[@]:0:$MAX_DOMAINS}")
         if [[ -n "$migrate_interface" ]]; then
-            log "📏 Limited to $MAX_DOMAINS domains for $interface -> $migrate_interface migration"
+            log "Limited to $MAX_DOMAINS domains for $interface -> $migrate_interface migration"
         else
-            log "📏 Limited to $MAX_DOMAINS domains for $interface"
+            log "Limited to $MAX_DOMAINS domains for $interface"
         fi
     fi
     
     local scan_count=${#domains[@]}
     if [[ -n "$migrate_interface" ]]; then
-        log "🎯 Scanning $scan_count domains using $interface -> $migrate_interface migration (total in file: $total_domains)"
+        log "Scanning $scan_count domains using $interface -> $migrate_interface migration (total in file: $total_domains)"
     else
-        log "🎯 Scanning $scan_count domains using $interface (total in file: $total_domains)"
+        log "Scanning $scan_count domains using $interface (total in file: $total_domains)"
     fi
     
     # Sequential scanning (proxy doesn't support parallel well)
@@ -2310,18 +2157,18 @@ run_scan() {
         local global_index=$((START_FROM + current - 1))
         
         if [[ -n "$migrate_interface" ]]; then
-            log "📊 Progress ($interface -> $migrate_interface): $current/$scan_count (Global: #$global_index) - $domain"
+            log "Progress ($interface -> $migrate_interface): $current/$scan_count (Global: #$global_index) - $domain"
         else
-            log "📊 Progress ($interface): $current/$scan_count (Global: #$global_index) - $domain"
+            log "Progress ($interface): $current/$scan_count (Global: #$global_index) - $domain"
         fi
         
         if [[ -n "$MAD_MODE" ]]; then
             # MAD analysis mode
             if test_domain_mad "$domain" "$global_index" "$interface" "$migrate_interface" "$MAD_TARGET_RUNS"; then
                 if [[ -n "$migrate_interface" ]]; then
-                    log "✅ [$global_index] MAD analysis completed: $domain (using $interface -> $migrate_interface migration)"
+                    log "[$global_index] MAD analysis completed: $domain (using $interface -> $migrate_interface migration)"
                 else
-                    log "✅ [$global_index] MAD analysis completed: $domain (using $interface)"
+                    log "[$global_index] MAD analysis completed: $domain (using $interface)"
                 fi
             else
                 if [[ -n "$migrate_interface" ]]; then
@@ -2334,9 +2181,9 @@ run_scan() {
             # Regular mode
             if test_domain "$domain" "$global_index" "$interface" "$migrate_interface"; then
                 if [[ -n "$migrate_interface" ]]; then
-                    log "✅ [$global_index] Completed: $domain (using $interface -> $migrate_interface migration)"
+                    log "[$global_index] Completed: $domain (using $interface -> $migrate_interface migration)"
                 else
-                    log "✅ [$global_index] Completed: $domain (using $interface)"
+                    log "[$global_index] Completed: $domain (using $interface)"
                 fi
             else
                 if [[ -n "$migrate_interface" ]]; then
@@ -2350,23 +2197,23 @@ run_scan() {
         # Progress indicator
         if [[ $((current % 10)) -eq 0 ]]; then
             if [[ -n "$migrate_interface" ]]; then
-                log "🔄 Progress checkpoint ($interface -> $migrate_interface): $current/$scan_count domains completed"
+                log "Progress ($interface -> $migrate_interface): $current/$scan_count domains completed"
             else
-                log "🔄 Progress checkpoint ($interface): $current/$scan_count domains completed"
+                log "Progress ($interface): $current/$scan_count domains completed"
             fi
         fi
     done
     
     if [[ -n "$migrate_interface" ]]; then
-        log "🎉 Completed all scans using $interface -> $migrate_interface migration"
+        log "Completed all scans using $interface -> $migrate_interface migration"
     else
-        log "🎉 Completed all scans using $interface"
+        log "Completed all scans using $interface"
     fi
 }
 
 # ── Summary Generation ───────────────────────────────────────────────────────
 generate_summary() {
-    log "📊 Generating summary report..."
+    log "Generating summary report..."
     
     # Determine which CSV files to analyze based on the mode
     local csv_files=()
@@ -2391,10 +2238,6 @@ generate_summary() {
             csv_files=("$csv_file")
             interface_names=("$INTERFACE")
         fi
-    else
-        # Dual interface mode (legacy)
-        csv_files=("${CSV_FILE}_eth0.csv" "${CSV_FILE}_nordlynx.csv")
-        interface_names=("ETH0" "NORDLYNX")
     fi
     
     # Calculate execution time for summary
@@ -2405,14 +2248,14 @@ generate_summary() {
     # Generate summary
     {
         echo "═══════════════════════════════════════════════════"
-        echo "    QUIC Bypassing Scanner Summary"
+        echo "    QUIC Proxy - Client Scanner Summary"
         echo "═══════════════════════════════════════════════════"
         echo "Scan Date: $(date)"
         echo "Start Time: $START_TIME_DISPLAY"
         echo "End Time: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "Total Execution Time: $(format_duration $duration)"
         echo ""
-        echo "🔧 Configuration:"
+        echo "Configuration:"
         echo "  Input File: $(basename "$INPUT_FILE") ($domains_input_count domains)"
         echo "  Output Directory: $(basename "$OUTPUT_DIR")"
         echo "  Parallel Workers: $PARALLEL_JOBS"
@@ -2434,7 +2277,7 @@ generate_summary() {
             local csv_file="${csv_files[$i]}"
             local interface_name="${interface_names[$i]}"
             
-            echo "📊 $interface_name Interface Statistics:"
+            echo "$interface_name Interface Statistics:"
             if [[ -f "$csv_file" ]]; then
                 local total_lines=$(wc -l < "$csv_file" 2>/dev/null || echo "1")
                 local scans=$((total_lines - 1))  # Subtract header
@@ -2451,22 +2294,22 @@ generate_summary() {
                     local data_mb=$((data / 1024 / 1024))
                     local migrated_mb=$((migrated / 1024 / 1024))
                     
-                    echo "  ✅ Total Domains Scanned: $scans"
-                    echo "  🎯 Successful Scans: $successful"
-                    echo "  ❌ Failed Scans: $failed"
-                    echo "  🔗 Proxy Operations: $proxy_success successful"
-                    echo "  📡 Total Connections: $connections"
-                    echo "  📊 Total Data: $data bytes (${data_mb}MB)"
-                    echo "  🔄 Migrated Data: $migrated bytes (${migrated_mb}MB)"
+                    echo "  Total Domains Scanned: $scans"
+                    echo "  Successful Scans: $successful"
+                    echo "  Failed Scans: $failed"
+                    echo "  Proxy Operations: $proxy_success successful"
+                    echo "  Total Connections: $connections"
+                    echo "  Total Data: $data bytes (${data_mb}MB)"
+                    echo "  Migrated Data: $migrated bytes (${migrated_mb}MB)"
                     if [[ $scans -gt 0 ]]; then
                         local success_rate=$(( (successful * 100) / scans ))
-                        echo "  📈 Success Rate: ${success_rate}%"
+                        echo "  Success Rate: ${success_rate}%"
                         
                         # Performance calculations
                         local avg_time_per_domain=$((duration / scans))
                         local domains_per_minute=$((scans * 60 / duration))
-                        echo "  ⏱️  Average Time per Domain: ${avg_time_per_domain}s"
-                        echo "  🚀 Processing Rate: ${domains_per_minute} domains/minute"
+                        echo "  Average Time per Domain: ${avg_time_per_domain}s"
+                        echo "  Processing Rate: ${domains_per_minute} domains/minute"
                     fi
                     
                     # Update totals
@@ -2474,17 +2317,17 @@ generate_summary() {
                     total_successful=$((total_successful + successful))
                     total_failed=$((total_failed + failed))
                 else
-                    echo "  ⚠️  No scans completed"
+                    echo "  No scans completed"
                 fi
             else
-                echo "  ❌ CSV file not found: $csv_file"
+                echo "  CSV file not found: $csv_file"
             fi
             echo ""
         done
         
         # Overall performance summary
         if [[ $total_scanned -gt 0 ]]; then
-            echo "🎯 Overall Performance Summary:"
+            echo "Overall Performance Summary:"
             echo "  Total Domains Processed: $total_scanned"
             echo "  Overall Success Rate: $(( (total_successful * 100) / total_scanned ))%"
             echo "  Total Execution Time: $(format_duration $duration)"
@@ -2502,19 +2345,19 @@ generate_summary() {
             echo ""
         fi
         
-        echo "📁 Output Files:"
+        echo "Output Files:"
         for csv_file in "${csv_files[@]}"; do
             if [[ -f "$csv_file" ]]; then
                 local file_size=$(du -h "$csv_file" | cut -f1)
-                echo "  📄 Results: $csv_file ($file_size)"
+                echo "Results: $csv_file ($file_size)"
             fi
         done
-        echo "  📋 Scan Log: $LOG_FILE"
-        echo "  📊 Summary: $SUMMARY_FILE"
+        echo "  Scan Log: $LOG_FILE"
+        echo "  Summary: $SUMMARY_FILE"
         
         # Additional files for parallel execution
         if [[ $PARALLEL_JOBS -gt 1 ]] && [[ -d "$TIMESTAMPED_OUTPUT_DIR/parallel_workers" ]]; then
-            echo "  🔧 Worker Logs: $TIMESTAMPED_OUTPUT_DIR/parallel_workers/"
+            echo "   Worker Logs: $TIMESTAMPED_OUTPUT_DIR/parallel_workers/"
         fi
         
         echo "═══════════════════════════════════════════════════"
@@ -2530,19 +2373,19 @@ cleanup() {
     local duration=$((end_time - SCRIPT_START_TIME))
     local end_time_display=$(date '+%Y-%m-%d %H:%M:%S')
     
-    log "🧹 Cleaning up..."
+    log "Cleaning up..."
     
     # Enhanced proxy cleanup
     stop_proxy
     
     # Stop any worker proxies with more aggressive cleanup
-    log "🛑 Stopping all proxy processes..."
+    log "Stopping all proxy processes..."
     pkill -f "quiche_server" 2>/dev/null || true
     pkill -f "script_proxy" 2>/dev/null || true
     pkill -f "cargo run.*quiche_server" 2>/dev/null || true
     
     # Force kill any remaining processes
-    sleep 2
+    sleep 1
     pkill -9 -f "quiche_server" 2>/dev/null || true
     pkill -9 -f "script_proxy" 2>/dev/null || true
     pkill -9 -f "cargo run.*quiche_server" 2>/dev/null || true
@@ -2551,7 +2394,7 @@ cleanup() {
     if command -v lsof >/dev/null 2>&1; then
         local pids_9090=$(lsof -ti:9090 2>/dev/null || true)
         if [[ -n "$pids_9090" ]]; then
-            log "🔌 Killing processes on port 9090: $pids_9090"
+            log "Killing processes on port 9090: $pids_9090"
             kill -9 $pids_9090 2>/dev/null || true
         fi
     fi
@@ -2561,7 +2404,7 @@ cleanup() {
         if command -v lsof >/dev/null 2>&1; then
             local pids=$(lsof -ti:$port 2>/dev/null || true)
             if [[ -n "$pids" ]]; then
-                log "🔌 Killing processes on port $port: $pids"
+                log "Killing processes on port $port: $pids"
                 kill -9 $pids 2>/dev/null || true
             fi
         fi
@@ -2571,7 +2414,7 @@ cleanup() {
     rm -f "$TIMESTAMPED_OUTPUT_DIR"/temp_*.csv
     
     # Display execution time
-    log "⏱️  Execution Summary:"
+    log "Execution Summary:"
     log "   Start time: $START_TIME_DISPLAY"
     log "   End time: $end_time_display"
     log "   Total duration: $(format_duration $duration)"
@@ -2581,7 +2424,7 @@ cleanup() {
 
 # Enhanced signal handling
 cleanup_on_interrupt() {
-    log "🛑 Interrupted by user - performing cleanup..."
+    log "Interrupted by user - performing cleanup..."
     cleanup
     exit 130
 }
@@ -2592,59 +2435,31 @@ trap cleanup_on_interrupt INT TERM
 
 # ── Main Execution ───────────────────────────────────────────────────────────
 main() {
-    # Initialize checkpoint system
-    ensure_checkpoint_dir
-    
-    # Handle resume mode
-    if [[ "$RESUME_MODE" == "true" ]]; then
-        log "� Resume mode activated"
-        if ! load_checkpoint; then
-            error_log "Failed to load checkpoint. Starting fresh scan."
-            RESUME_MODE=false
-        else
-            log "✅ Successfully loaded checkpoint"
-            # Override START_FROM with resume position
-            START_FROM=$RESUME_FROM_INDEX
-        fi
-    else
-        # Clean any existing checkpoint when starting fresh
-        if [[ -f "$CHECKPOINT_FILE" ]]; then
-            log "🧹 Cleaning existing checkpoint for fresh start"
-            cleanup_checkpoint
-        fi
-    fi
-    
-    log "�🚀 Starting QUIC Bypassing Scanner"
-    log "📅 Start time: $START_TIME_DISPLAY"
-    log "📂 Input: $INPUT_FILE"
-    log "📁 Output: $TIMESTAMPED_OUTPUT_DIR"
-    log "🏷️  Timestamp: $TIMESTAMP"
-    log "📋 Log file: $LOG_FILE"
-    log "⚙️  Configuration: start=$START_FROM, max=$MAX_DOMAINS, parallel=$PARALLEL_JOBS, timeout=${TIMEOUT}s, runs_per_domain=$NUM_RUNS"
-    log "💾 Checkpoint: ${RESUME_MODE:+RESUME MODE - }$CHECKPOINT_FILE"
+    log "Starting QUIC Bypassing Scanner"
+    log "Start time: $START_TIME_DISPLAY"
+    log "Input: $INPUT_FILE"
+    log "Output: $TIMESTAMPED_OUTPUT_DIR"
+    log "Timestamp: $TIMESTAMP"
+    log "Log file: $LOG_FILE"
+    log "Configuration: start=$START_FROM, max=$MAX_DOMAINS, parallel=$PARALLEL_JOBS, timeout=${TIMEOUT}s, runs_per_domain=$NUM_RUNS"
     
     if [[ "$NO_PROXY" == "true" ]]; then
-        log "🔧 Mode: Direct connection (no proxy)"
-        log "📄 CSV file: ${CSV_FILE}_direct.csv"
+        log "Mode: Direct connection (no proxy)"
+        log "CSV file: ${CSV_FILE}_direct.csv"
     elif [[ -n "$INTERFACE" ]]; then
         if [[ -n "$MIGRATE" ]]; then
-            log "🔧 Mode: Single interface with migration ($INTERFACE -> $MIGRATE)"
-            log "📄 CSV file: ${CSV_FILE}_${INTERFACE}_migrate_${MIGRATE}.csv"
+            log "Mode: Single interface with migration ($INTERFACE -> $MIGRATE)"
+            log "CSV file: ${CSV_FILE}_${INTERFACE}_migrate_${MIGRATE}.csv"
         else
-            log "🔧 Mode: Single interface ($INTERFACE)"
-            log "📄 CSV file: ${CSV_FILE}_${INTERFACE}.csv"
+            log "Mode: Single interface ($INTERFACE)"
+            log "CSV file: ${CSV_FILE}_${INTERFACE}.csv"
         fi
         if [[ $PARALLEL_JOBS -gt 1 ]]; then
-            log "🔧 Parallel workers: $PARALLEL_JOBS"
+            log "Parallel workers: $PARALLEL_JOBS"
         fi
     else
-        log "🔧 Mode: Dual interface (eth0 + nordlynx)"
-        log "📄 CSV files: ${CSV_FILE}_eth0.csv, ${CSV_FILE}_nordlynx.csv"
-    fi
-    
-    # Save initial checkpoint
-    if [[ "$RESUME_MODE" != "true" ]]; then
-        save_checkpoint "initialization" "$START_FROM" "1" "$INTERFACE" "$MIGRATE"
+        log "Mode: Dual interface (eth0 + nordlynx)"
+        log "CSV files: ${CSV_FILE}_eth0.csv, ${CSV_FILE}_nordlynx.csv"
     fi
     
     # Ensure we're in the right directory
@@ -2652,50 +2467,41 @@ main() {
     
     if [[ "$NO_PROXY" == "true" ]]; then
         # No-proxy mode
-        save_checkpoint "no_proxy_scan" "$START_FROM" "1" "direct" ""
-        log "🔄 Scanning with direct connection (no proxy)..."
+        log "Scanning with direct connection (no proxy)..."
         run_scan_no_proxy "direct"
     elif [[ -n "$INTERFACE" ]]; then
         # Single interface mode (with optional migration)
         if [[ $PARALLEL_JOBS -gt 1 ]]; then
             # Parallel execution
-            log "🔄 Starting parallel scan ($PARALLEL_JOBS workers) with $INTERFACE interface..."
-            save_checkpoint "parallel_scan" "$START_FROM" "1" "$INTERFACE" "$MIGRATE"
+            log "Starting parallel scan ($PARALLEL_JOBS workers) with $INTERFACE interface..."
             run_parallel_scan "$INTERFACE" "$MIGRATE"
         else
             # Sequential execution  
             if [[ -n "$MIGRATE" ]]; then
-                save_checkpoint "single_interface_migration" "$START_FROM" "1" "$INTERFACE" "$MIGRATE"
-                log "🔄 Scanning with $INTERFACE interface and migration to $MIGRATE..."
+                log "Scanning with $INTERFACE interface and migration to $MIGRATE..."
                 run_scan "$INTERFACE" "$MIGRATE"
             else
-                save_checkpoint "single_interface" "$START_FROM" "1" "$INTERFACE" ""
-                log "🔄 Scanning with $INTERFACE interface..."
+                log "Scanning with $INTERFACE interface..."
                 run_scan "$INTERFACE" ""
             fi
         fi
     else
         # Dual interface mode (legacy behavior)
         if [[ $PARALLEL_JOBS -gt 1 ]]; then
-            log "⚠️  Parallel mode not supported with dual interface mode. Using sequential."
+            log "Warning: Parallel mode not supported with dual interface mode. Using sequential."
         fi
-        save_checkpoint "dual_interface_eth0" "$START_FROM" "1" "eth0" ""
-        log "🔄 Phase 1: Scanning with ETH0 interface..."
+        log "Phase 1: Scanning with ETH0 interface..."
         run_scan "eth0" ""
         
-        save_checkpoint "dual_interface_nordlynx" "$START_FROM" "1" "nordlynx" ""
-        log "🔄 Phase 2: Scanning with NORDLYNX interface..."
+        log "Phase 2: Scanning with NORDLYNX interface..."
         run_scan "nordlynx" ""
     fi
     
     local completion_time=$(date +%s)
     local elapsed=$((completion_time - SCRIPT_START_TIME))
     
-    log "🎉 All scans completed successfully!"
-    log "⏱️  Scanning completed in $(format_duration $elapsed)"
-    
-    # Clean up checkpoint on successful completion
-    cleanup_checkpoint
+    log "All scans completed successfully!"
+    log "Scanning completed in $(format_duration $elapsed)"
 }
 
 # Run the main function
