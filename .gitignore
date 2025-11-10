@@ -14,6 +14,9 @@ webpage_analysis_results.csv
 netlog.json
 scan_results/
 
+# input text
+*.txt
+
 # OS generated files
 .DS_Store
 .DS_Store?

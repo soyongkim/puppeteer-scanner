@@ -4,15 +4,15 @@
  */
 
 import {
-    analyzeRedirectAndIP,
-    calculateDomainStatistics,
-    detectCloudflareChallenge,
-    extractConnectionStatistics
+  analyzeRedirectAndIP,
+  calculateDomainStatistics,
+  detectCloudflareChallenge,
+  extractConnectionStatistics
 } from '../analysis/domains.js';
 import {
-    createErrorLanguageResults,
-    createSkippedLanguageResults,
-    detectWebsiteLanguage
+  createErrorLanguageResults,
+  createSkippedLanguageResults,
+  detectWebsiteLanguage
 } from '../analysis/language.js';
 import { extractStatusFromProxyConnection, fetchProxyStats, getDefaultProxyStats } from '../network/proxy.js';
 import { escapeCsvField, writeToCsv } from '../utils/csv.js';
@@ -126,7 +126,11 @@ export async function processResults(scanResult, config) {
     response,
     proxyStats,
     useProxy: config.useProxy,
-    global: global || {},
+    global: { 
+      ...(global || {}),
+      state: state,
+      targetDomainRedirectInfo: state.targetDomainRedirectInfo
+    },
     debugMode: config.debugMode
   });
 
@@ -444,12 +448,28 @@ export async function handleScanError(err, config, state) {
       if (originalConnection && originalConnection.statusInfo) {
         for (const [status, count] of Object.entries(originalConnection.statusInfo)) {
           if (status.match(/^3\d\d$/)) {
-            // Found a redirect status, look for the destination domain in other connections
-            const otherDomains = connections.filter(conn => conn.domain !== config.targetUrl);
-            if (otherDomains.length > 0) {
-              // Use the first other domain as redirect destination
-              errorRedirectedDomain = otherDomains[0].domain;
-              debug(`[ERROR-PROXY-REDIRECT] Detected redirect from proxy: ${config.targetUrl} (${status}) -> ${errorRedirectedDomain}`, config.debugMode);
+            // Found a redirect status, look for valid redirect destinations
+            // Only consider domains that are likely to be the actual redirect target
+            const candidateRedirectDomains = connections.filter(conn => {
+              return conn.domain !== config.targetUrl && (
+                // Same base domain (e.g., pchome.com.tw -> www.pchome.com.tw)
+                conn.domain.includes(config.targetUrl) || 
+                config.targetUrl.includes(conn.domain) ||
+                // www prefix variants
+                conn.domain === `www.${config.targetUrl}` ||
+                config.targetUrl === `www.${conn.domain}` ||
+                // Remove www and compare
+                conn.domain.replace(/^www\./, '') === config.targetUrl.replace(/^www\./, '')
+              );
+            });
+            
+            if (candidateRedirectDomains.length > 0) {
+              // Use the most likely redirect candidate (prefer www versions)
+              const wwwVariant = candidateRedirectDomains.find(conn => conn.domain.startsWith('www.'));
+              errorRedirectedDomain = wwwVariant ? wwwVariant.domain : candidateRedirectDomains[0].domain;
+              debug(`[ERROR-PROXY-REDIRECT] Detected valid redirect from proxy: ${config.targetUrl} (${status}) -> ${errorRedirectedDomain}`, config.debugMode);
+            } else {
+              debug(`[ERROR-PROXY-REDIRECT] Found ${status} redirect but no valid redirect candidate in connections for ${config.targetUrl}`, config.debugMode);
             }
             break;
           }

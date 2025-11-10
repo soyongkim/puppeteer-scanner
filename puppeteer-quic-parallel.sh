@@ -46,7 +46,7 @@ set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLIENT_SCRIPT="$HOME/Workspace/puppeteer_scanner/puppeteer-client.js"
+CLIENT_SCRIPT="$HOME/Workspace/puppeteer-scanner/puppeteer-client.js"
 CLIENT_SCRIPT_DIR="$(dirname "$CLIENT_SCRIPT")"
 PROXY_SCRIPT="$HOME/Workspace/quic_proxy/launch_proxy.sh"
 

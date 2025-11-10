@@ -58,6 +58,92 @@ export function updateDomainResourceType(domain, resourceType, status = 'request
 }
 
 /**
+ * Validate if a domain is a valid redirect target based on proxy connections
+ * @param {string} targetDomain - Original target domain
+ * @param {string} candidateDomain - Candidate redirect domain
+ * @param {Object} proxyStats - Proxy statistics
+ * @param {boolean} useProxy - Whether proxy is being used
+ * @param {boolean} debugMode - Debug logging enabled
+ * @returns {boolean} Whether the redirect is valid
+ */
+function validateRedirectCandidate(targetDomain, candidateDomain, proxyStats, useProxy, debugMode) {
+  if (!useProxy || !proxyStats || !proxyStats.connections_detail) {
+    // Without proxy, accept all valid redirects (but this is risky)
+    return true;
+  }
+
+  const allConnections = parseConnectionsDetail(proxyStats.connections_detail);
+  const isValid = allConnections.some(conn => {
+    return conn.domain === candidateDomain || 
+           conn.domain.includes(candidateDomain) || 
+           candidateDomain.includes(conn.domain);
+  });
+  
+  debug(`[REDIRECT-VALIDATION] Checking if ${candidateDomain} matches proxy connections: ${isValid}`, debugMode);
+  return isValid;
+}
+
+/**
+ * Extract IP address for a redirect domain from proxy connection info
+ * @param {string} domain - Domain to find IP for
+ * @param {Object} proxyStats - Proxy statistics
+ * @param {boolean} useProxy - Whether proxy is being used
+ * @param {boolean} debugMode - Debug logging enabled
+ * @returns {string} IP address or null
+ */
+function extractRedirectIP(domain, proxyStats, useProxy, debugMode) {
+  if (!useProxy || !proxyStats || !proxyStats.connections_detail) {
+    return null;
+  }
+
+  // Try direct match first
+  const redirectIPInfo = extractRealIPFromProxy(domain, proxyStats);
+  if (redirectIPInfo) {
+    debug(`[REDIRECT-IP] Found IP for ${domain}: ${redirectIPInfo.ip}`, debugMode);
+    return redirectIPInfo.ip;
+  }
+
+  // Try partial matching as fallback
+  const allConnections = parseConnectionsDetail(proxyStats.connections_detail);
+  for (const conn of allConnections) {
+    if (conn.ip && (conn.domain.includes(domain) || domain.includes(conn.domain))) {
+      debug(`[REDIRECT-IP] Found IP via partial match for ${domain}: ${conn.ip}`, debugMode);
+      return conn.ip;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get redirect info from multiple possible sources
+ * @param {Object} global - Global object containing redirect info
+ * @param {boolean} debugMode - Debug logging enabled
+ * @returns {Object} Redirect info object and source
+ */
+function getRedirectInfo(global, debugMode) {
+  let redirectInfo = global.redirectInfo;
+  let redirectSource = 'global.redirectInfo';
+  
+  if (!redirectInfo && global.state && global.state.capturedRedirectInfo) {
+    redirectInfo = global.state.capturedRedirectInfo;
+    redirectSource = 'state.capturedRedirectInfo';
+  }
+  
+  if (!redirectInfo && global.targetDomainRedirectInfo && global.targetDomainRedirectInfo.redirectLocation) {
+    redirectInfo = {
+      locationHeader: global.targetDomainRedirectInfo.redirectLocation,
+      redirectStatus: global.targetDomainRedirectInfo.redirectStatus
+    };
+    redirectSource = 'targetDomainRedirectInfo';
+  }
+  
+  debug(`[REDIRECT-SOURCE] Using redirect info from: ${redirectSource}, available: ${!!redirectInfo}`, debugMode);
+  
+  return { redirectInfo, redirectSource };
+}
+
+/**
  * Analyze redirect detection and IP extraction
  * @param {Object} params - Parameters object
  * @param {string} params.targetUrl - Target URL
@@ -91,13 +177,15 @@ export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy
     }
   }
   
-  // Check for redirection using Location header first, then fall back to response URL comparison
+  // ═══ REDIRECT DETECTION LOGIC ═══
   let redirectDetected = false;
   
-  // ═══ METHOD 1: Check Location header from redirect response ═══
-  if (global.redirectInfo && global.redirectInfo.locationHeader) {
+  // METHOD 1: Check Location header from redirect response
+  const { redirectInfo } = getRedirectInfo(global, debugMode);
+  
+  if (redirectInfo && redirectInfo.locationHeader) {
     try {
-      let locationUrl = global.redirectInfo.locationHeader;
+      let locationUrl = redirectInfo.locationHeader;
       
       // Handle relative URLs by making them absolute
       if (!locationUrl.startsWith('http')) {
@@ -108,17 +196,13 @@ export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy
       const locationDomain = locationUrlObj.hostname;
       
       if (targetUrl !== locationDomain) {
-        redirectedDomain = locationDomain;
-        redirectDetected = true;
-        debug(`[LOCATION-HEADER] Redirection detected: ${targetUrl} -> ${locationDomain} (HTTP ${global.redirectInfo.redirectStatus})`, debugMode);
-        
-        // Try to get IP for redirected domain from proxy connection info
-        if (useProxy && proxyStats && proxyStats.connections_detail) {
-          const redirectIPInfo = extractRealIPFromProxy(locationDomain, proxyStats);
-          if (redirectIPInfo) {
-            redirectedIP = redirectIPInfo.ip;
-            debug(`[LOCATION-REDIRECT-IP] Found IP for redirected domain ${locationDomain}: ${redirectedIP}`, debugMode);
-          }
+        if (validateRedirectCandidate(targetUrl, locationDomain, proxyStats, useProxy, debugMode)) {
+          redirectedDomain = locationDomain;
+          redirectDetected = true;
+          redirectedIP = extractRedirectIP(locationDomain, proxyStats, useProxy, debugMode);
+          debug(`[LOCATION-HEADER] Valid redirection detected: ${targetUrl} -> ${locationDomain} (HTTP ${redirectInfo.redirectStatus})`, debugMode);
+        } else {
+          debug(`[LOCATION-REJECTED] Location header ${locationDomain} not found in proxy connections - ignoring redirect`, debugMode);
         }
       }
       
@@ -130,37 +214,21 @@ export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy
     }
   }
   
-  // ═══ METHOD 2: Fallback to response URL comparison ═══
+  // METHOD 2: Fallback to response URL comparison
   if (!redirectDetected) {
     const responseUrl = response ? response.url() : `https://${targetUrl}`;
-    let finalDomain = targetUrl;
     
     try {
       const finalUrlObj = new URL(responseUrl);
-      finalDomain = finalUrlObj.hostname;
+      const finalDomain = finalUrlObj.hostname;
       
-      // Check if there was a redirection - compare actual domains first
       if (targetUrl !== finalDomain) {
-        redirectedDomain = finalDomain;
-        debug(`[RESPONSE-URL] Redirection detected: ${targetUrl} -> ${finalDomain}`, debugMode);
-        
-        // Try to get IP for redirected domain from proxy connection info
-        if (useProxy && proxyStats && proxyStats.connections_detail) {
-          const redirectIPInfo = extractRealIPFromProxy(finalDomain, proxyStats);
-          if (redirectIPInfo) {
-            redirectedIP = redirectIPInfo.ip;
-            debug(`[RESPONSE-REDIRECT-IP] Found IP for redirected domain ${finalDomain}: ${redirectedIP}`, debugMode);
-          } else {
-            // Try alternative matching - sometimes the proxy logs the original target but connects to redirected domain
-            const allConnections = parseConnectionsDetail(proxyStats.connections_detail);
-            for (const conn of allConnections) {
-              if (conn.ip && (conn.domain.includes(finalDomain) || finalDomain.includes(conn.domain))) {
-                redirectedIP = conn.ip;
-                debug(`[RESPONSE-REDIRECT-IP] Found IP via partial match for ${finalDomain}: ${redirectedIP}`, debugMode);
-                break;
-              }
-            }
-          }
+        if (validateRedirectCandidate(targetUrl, finalDomain, proxyStats, useProxy, debugMode)) {
+          redirectedDomain = finalDomain;
+          redirectedIP = extractRedirectIP(finalDomain, proxyStats, useProxy, debugMode);
+          debug(`[RESPONSE-URL] Valid redirection detected: ${targetUrl} -> ${finalDomain}`, debugMode);
+        } else {
+          debug(`[RESPONSE-REJECTED] Final URL ${finalDomain} not found in proxy connections - ignoring redirect`, debugMode);
         }
       } else {
         debug(`📍 No redirection detected: ${targetUrl} (final: ${finalDomain})`, debugMode);

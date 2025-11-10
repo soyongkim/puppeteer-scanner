@@ -187,6 +187,30 @@ export function setupPageListeners(page, state, config) {
           debug(`[MAIN-STATUS] First main document status: ${status}`, config.debugMode);
         }
         
+        // ═══ CAPTURE 300-series redirect Location headers ═══
+        if (status >= 300 && status < 400) {
+          const locationHeader = res.headers()['location'];
+          if (locationHeader) {
+            state.targetDomainRedirectInfo.hasRedirect = true;
+            state.targetDomainRedirectInfo.redirectStatus = status;
+            state.targetDomainRedirectInfo.redirectLocation = locationHeader;
+            
+            // Store for global access in redirect analysis
+            global.redirectInfo = {
+              locationHeader: locationHeader,
+              redirectStatus: status
+            };
+            
+            // Also store in state for persistence
+            state.capturedRedirectInfo = {
+              locationHeader: locationHeader,
+              redirectStatus: status
+            };
+            
+            debug(`[REDIRECT-CAPTURE] ${status} redirect to: ${locationHeader}`, config.debugMode);
+          }
+        }
+        
         // Update highest priority status based on error severity
         if (!state.highestPriorityStatus || 
             (status >= 400 && (!state.highestPriorityStatus || state.highestPriorityStatus < 400))) {
