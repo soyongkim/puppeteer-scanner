@@ -22,7 +22,7 @@ export function escapeCsvField(field) {
  * @returns {string} CSV header row
  */
 export function generateCsvHeader() {
-  return 'domain,ip_addr,first_status_code,redirected_domain,redirected_ip,redirected_status_code,Primary Language,Declared Language,chrome_fail,load_time,total domains,failed domains,not 200 domains,403 responses,451 responses,500 responses,503 responses,403 domain names,451 domain names,500 domain names,503 domain names,TCP return,cloudflare_challenge,total_opened_streams,total_data_amount,total_migrated_data_amount,migrated_data_rate,total_stateless_resets,total_disable_connection_migrations,new_connection_id_count,migration_disabled_new_id_conflicts,PVstate_idle:probing:validated:failed:migrated,pv_probing_domains,pv_failed_domains,stateless_reset_domains,migrated_domains,connection_details\n';
+  return 'timestamp,domain,ip_addr,first_status_code,redirected_domain,redirected_ip,redirected_status_code,Primary Language,Declared Language,chrome_fail,load_time,total domains,failed domains,not 200 domains,403 responses,451 responses,500 responses,503 responses,403 domain names,451 domain names,500 domain names,503 domain names,TCP return,cloudflare_challenge,total_opened_streams,total_data_amount,total_migrated_data_amount,migrated_data_rate,total_stateless_resets,total_disable_connection_migrations,new_connection_id_count,migration_disabled_new_id_conflicts,PVstate_idle:probing:validated:failed:migrated,pv_probing_domains,pv_failed_domains,stateless_reset_domains,migrated_domains,connection_details\n';
 }
 
 /**
@@ -57,9 +57,12 @@ export function formatCsvRow(results) {
   const format500DomainNames = statusDomainNames['500'].map(domain => `${domain}/`).join('; ');
   const format503DomainNames = statusDomainNames['503'].map(domain => `${domain}/`).join('; ');
 
-  // Construct row with exact column order from original
+  // Generate timestamp for this scan
+  const timestamp = new Date().toISOString();
+  
+  // Construct row with timestamp as first column
   const chromeFail = results.chromeFail || '-';
-  return `${escapeCsvField(targetUrl)},${escapeCsvField(originalIP)},${firstStatusCode},${escapeCsvField(redirectedDomain)},${escapeCsvField(redirectedIP)},${redirectedStatusCode},${escapeCsvField(languageResults.primaryLanguage)},${escapeCsvField(languageResults.declaredLanguage)},${chromeFail},${loadTime},${uniqueDomainsRequested},${connectionFailedDomains.size},${non200Domains.size},${statusCounts['403']},${statusCounts['451']},${statusCounts['500']},${statusCounts['503']},"${format403DomainNames}","${format451DomainNames}","${format500DomainNames}","${format503DomainNames}",${tcpResult},${cloudflareDetected},${proxyFields.totalOpenedStreams},${proxyFields.totalDataAmount},${proxyFields.totalMigratedDataAmount},${proxyFields.migrationSuccessRate},${proxyFields.totalStatelessResets},${proxyFields.totalMigrationDisabled},${proxyFields.newConnectionIdCount},${proxyFields.migrationDisabledNewIdConflicts},${proxyFields.pvStateCounts},${proxyFields.pvProbingDomains},${proxyFields.pvFailedDomains},${proxyFields.statelessResetDomains},${proxyFields.migratedDomains},${proxyFields.connectionDetails}\n`;
+  return `${timestamp},${escapeCsvField(targetUrl)},${escapeCsvField(originalIP)},${firstStatusCode},${escapeCsvField(redirectedDomain)},${escapeCsvField(redirectedIP)},${redirectedStatusCode},${escapeCsvField(languageResults.primaryLanguage)},${escapeCsvField(languageResults.declaredLanguage)},${chromeFail},${loadTime},${uniqueDomainsRequested},${connectionFailedDomains.size},${non200Domains.size},${statusCounts['403']},${statusCounts['451']},${statusCounts['500']},${statusCounts['503']},"${format403DomainNames}","${format451DomainNames}","${format500DomainNames}","${format503DomainNames}",${tcpResult},${cloudflareDetected},${proxyFields.totalOpenedStreams},${proxyFields.totalDataAmount},${proxyFields.totalMigratedDataAmount},${proxyFields.migrationSuccessRate},${proxyFields.totalStatelessResets},${proxyFields.totalMigrationDisabled},${proxyFields.newConnectionIdCount},${proxyFields.migrationDisabledNewIdConflicts},${proxyFields.pvStateCounts},${proxyFields.pvProbingDomains},${proxyFields.pvFailedDomains},${proxyFields.statelessResetDomains},${proxyFields.migratedDomains},${proxyFields.connectionDetails}\n`;
 }
 
 /**

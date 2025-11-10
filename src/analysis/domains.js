@@ -125,11 +125,13 @@ function getRedirectInfo(global, debugMode) {
   let redirectInfo = global.redirectInfo;
   let redirectSource = 'global.redirectInfo';
   
+  // Check for capturedRedirectInfo from state (if available)
   if (!redirectInfo && global.state && global.state.capturedRedirectInfo) {
     redirectInfo = global.state.capturedRedirectInfo;
     redirectSource = 'state.capturedRedirectInfo';
   }
   
+  // Check targetDomainRedirectInfo as fallback
   if (!redirectInfo && global.targetDomainRedirectInfo && global.targetDomainRedirectInfo.redirectLocation) {
     redirectInfo = {
       locationHeader: global.targetDomainRedirectInfo.redirectLocation,
