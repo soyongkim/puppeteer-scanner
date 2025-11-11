@@ -64,6 +64,7 @@ NO_PROXY=false
 PV_MIGRATION=false
 MAD_MODE=""
 MAD_TARGET_RUNS=0
+PAIR_MODE=false
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -123,6 +124,10 @@ while [[ $# -gt 0 ]]; do
             PV_MIGRATION=true
             shift
             ;;
+        --pair)
+            PAIR_MODE=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo ""
@@ -136,8 +141,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --interface=NAME     Network interface for proxy (e.g., eth0, nordlynx)"
             echo "  --migrate=NAME       Migration interface for proxy (e.g., nordlynx)"
             echo "  --num=N              Number of runs per domain (default: 1)"
-            echo "  --num=mad_3          MAD analysis with 3 target runs (baseline + migration)"
-            echo "  --num=mad_5          MAD analysis with 5 target runs (baseline + migration)"
+            echo "  --num=mad_3          MAD analysis with 3 target runs (MAD-only mode)"
+            echo "  --num=mad_5          MAD analysis with 5 target runs (MAD-only mode)"
+            echo "  --pair               Enable paired mode: baseline + migration phases"
             echo "  --no-proxy           Run without proxy (direct connection)"
             echo "  --pv-migration       Enable path validation migration in proxy"
             echo ""
@@ -148,6 +154,8 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --start=100 --max=50              # Scan 50 domains starting from #100"
             echo "  $0 --parallel=3                      # Run 3 parallel scans"
             echo "  $0 --num=3                           # Run each domain 3 times for consistency"
+            echo "  $0 --num=mad_5 --pair --interface=nordlynx --migrate=ens18 # MAD with baseline + migration"
+            echo "  $0 --num=mad_5 --interface=nordlynx   # MAD-only mode (no migration)"
             echo "  $0 --no-proxy                        # Run without proxy (direct connection)"
             exit 0
             ;;
@@ -193,6 +201,14 @@ if [[ $NUM_RUNS -gt 10 ]]; then
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Cancelled by user"
         exit 0
+    fi
+fi
+
+# Validate --pair option
+if [[ "$PAIR_MODE" == "true" ]]; then
+    if [[ -z "$MIGRATE" ]]; then
+        echo "Error: --pair requires migration interface (--migrate=INTERFACE)"
+        exit 1
     fi
 fi
 
@@ -424,16 +440,35 @@ run_parallel_worker() {
         
         # Test domain based on mode (MAD analysis or regular runs)
         local domain_success=false
-        if [[ -n "$mad_mode" ]]; then
-            # MAD analysis mode
-            worker_log "MAD analysis mode: $mad_mode (target runs: $mad_target_runs per phase)"
-            
-            # Call the full MAD analysis function with worker ID and port
-            if test_domain_mad "$domain" "$global_index" "$interface" "$migrate_interface" "$mad_target_runs" "$worker_id" "$worker_port"; then
-                domain_success=true
-                worker_log "[$current/${#domains[@]}] MAD analysis completed: $domain"
+        if [[ "$PAIR_MODE" == "true" && -n "$migrate_interface" ]]; then
+            # Paired mode: baseline + migration phases
+            if [[ -n "$mad_mode" ]]; then
+                # MAD Paired mode
+                worker_log "MAD paired mode: $mad_mode (target runs: $mad_target_runs per phase)"
+                if test_domain_mad "$domain" "$global_index" "$interface" "$migrate_interface" "$mad_target_runs" "$worker_id" "$worker_port"; then
+                    domain_success=true
+                    worker_log "[$current/${#domains[@]}] MAD paired analysis completed: $domain"
+                else
+                    worker_log "[$current/${#domains[@]}] MAD paired analysis failed: $domain"
+                fi
             else
-                worker_log "[$current/${#domains[@]}] MAD analysis failed: $domain"
+                # Regular Paired mode
+                worker_log "Paired mode: $NUM_RUNS runs per phase"
+                if test_domain_paired "$domain" "$global_index" "$interface" "$migrate_interface" "$NUM_RUNS" "$worker_id" "$worker_port"; then
+                    domain_success=true
+                    worker_log "[$current/${#domains[@]}] Paired analysis completed: $domain"
+                else
+                    worker_log "[$current/${#domains[@]}] Paired analysis failed: $domain"
+                fi
+            fi
+        elif [[ -n "$mad_mode" ]]; then
+            # MAD-only mode: single interface with MAD filtering
+            worker_log "MAD-only mode: $mad_mode (target runs: $mad_target_runs with filtering)"
+            if test_domain_mad_only "$domain" "$global_index" "$interface" "$mad_target_runs" "$worker_id" "$worker_port"; then
+                domain_success=true
+                worker_log "[$current/${#domains[@]}] MAD-only analysis completed: $domain"
+            else
+                worker_log "[$current/${#domains[@]}] MAD-only analysis failed: $domain"
             fi
         else
             # Regular mode - Test domain multiple times as specified by NUM_RUNS
@@ -941,7 +976,12 @@ parse_csv_run_data() {
     fi
     
     # Find the last line for this domain (most recent run)
-    local last_line=$(grep "^$domain," "$csv_file" | tail -1)
+    # Handle both formats: with timestamp (^timestamp,$domain,) and without timestamp (^$domain,)
+    local last_line=$(grep ",$domain," "$csv_file" | tail -1)
+    if [[ -z "$last_line" ]]; then
+        # Fallback to original format without timestamp
+        last_line=$(grep "^$domain," "$csv_file" | tail -1)
+    fi
     
     if [[ -z "$last_line" ]]; then
         echo "NO_DATA"
@@ -951,13 +991,19 @@ parse_csv_run_data() {
     # Parse CSV fields (adjust indices based on actual CSV structure)
     IFS=',' read -ra fields <<< "$last_line"
     
-    local sni="${fields[0]}"
-    local ip_addr="${fields[1]}" 
-    local status_code="${fields[2]}"      # first_status_code column
-    local load_time="${fields[9]}"        # load_time column
-    local total_data="${fields[24]}"      # total_data_amount column
-    local migrated_data="${fields[25]}"   # total_migrated_data_amount column
-    local migrated_domains="${fields[35]}" # migrated_domains column
+    # Detect if first field is timestamp (contains 'T' and 'Z')
+    local field_offset=0
+    if [[ "${fields[0]}" =~ T.*Z ]]; then
+        field_offset=1  # Skip timestamp column
+    fi
+    
+    local sni="${fields[$((field_offset + 0))]}"
+    local ip_addr="${fields[$((field_offset + 1))]}" 
+    local status_code="${fields[$((field_offset + 2))]}"      # first_status_code column
+    local load_time="${fields[$((field_offset + 9))]}"        # load_time column
+    local total_data="${fields[$((field_offset + 24))]}"      # total_data_amount column
+    local migrated_data="${fields[$((field_offset + 25))]}"   # total_migrated_data_amount column
+    local migrated_domains="${fields[$((field_offset + 35))]}" # migrated_domains column
     
     # Validate critical fields
     if [[ "$status_code" == "-" || "$status_code" == "FAILED" || "$status_code" == "failed to lookup address" || -z "$status_code" ]]; then
@@ -966,7 +1012,7 @@ parse_csv_run_data() {
     fi
     
     # Accept 200 OK, 301/302 redirects, and "undefined" (which means successful redirect)
-    local redirected_status="${fields[5]}"  # redirected_status_code column
+    local redirected_status="${fields[$((field_offset + 5))]}"  # redirected_status_code column
     if [[ "$status_code" == "200" ]]; then
         # Direct 200 response is valid
         true
@@ -979,7 +1025,7 @@ parse_csv_run_data() {
     elif [[ "$status_code" == "undefined" ]]; then
         # "undefined" status typically means successful redirect without initial status
         # Check if there's a redirected domain (meaning redirect happened successfully)
-        local redirected_domain="${fields[3]}"
+        local redirected_domain="${fields[$((field_offset + 3))]}"
         if [[ "$redirected_domain" == "-" || -z "$redirected_domain" ]]; then
             echo "NO_200"  
             return 1
@@ -1128,7 +1174,292 @@ process_migrated_domains() {
     echo "${all_domains_formatted}~${dominant_subdomain}"
 }
 
-# MAD-based domain testing with baseline and migration phases
+# Paired mode: Run baseline + migration phases with regular run counts (non-MAD)
+test_domain_paired() {
+    local domain="$1"
+    local index="$2"
+    local interface="$3"
+    local migrate_interface="$4"
+    local num_runs="$5"
+    local worker_id="${6:-""}"
+    local worker_port="${7:-""}"
+    
+    log "[$index] Starting paired analysis for: $domain ($num_runs runs per phase)"
+    
+    # Create phase-specific CSV files
+    local worker_suffix=""
+    if [[ -n "$worker_id" ]]; then
+        worker_suffix="_worker_${worker_id}"
+    fi
+    
+    local worker_dir="${TIMESTAMPED_OUTPUT_DIR}/parallel_workers"
+    mkdir -p "$worker_dir"
+    
+    local baseline_csv="${worker_dir}/baseline_run_${interface}${worker_suffix}.csv"
+    local migration_csv="${worker_dir}/migration_run_${interface}_to_${migrate_interface}${worker_suffix}.csv"
+    
+    # ── Phase 1: Baseline (no migration) ──
+    log "[$index] Phase 1: Baseline analysis for $domain ($num_runs runs)"
+    
+    # Temporarily disable migration for baseline
+    local original_migrate="$migrate_interface"
+    migrate_interface=""
+    
+    local baseline_success_count=0
+    for ((run=1; run<=num_runs; run++)); do
+        log "  [$index] Baseline run $run/$num_runs for $domain"
+        
+        # Start proxy for baseline run
+        if [[ -n "$worker_port" ]]; then
+            if ! start_proxy_worker "$interface" "" "$worker_port" "$worker_id" "$(dirname "$baseline_csv")"; then
+                error_log "Failed to start worker proxy for baseline run $run of $domain"
+                continue
+            fi
+        else
+            if ! start_proxy "$interface" ""; then
+                error_log "Failed to start proxy for baseline run $run of $domain"
+                continue
+            fi
+        fi
+        
+        # Run baseline test
+        cd "$CLIENT_SCRIPT_DIR"
+        local baseline_success=false
+        if [[ -n "$worker_port" ]]; then
+            local report_port=$((9090 + worker_id * 10))
+            if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --proxy-port="$worker_port" --report-port="$report_port" --csv="$baseline_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
+                baseline_success=true
+            fi
+        else
+            if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --csv="$baseline_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
+                baseline_success=true
+            fi
+        fi
+        
+        if [[ "$baseline_success" == "true" ]]; then
+            baseline_success_count=$((baseline_success_count + 1))
+            log "  [$index] Baseline run $run successful"
+        else
+            log "  [$index] Baseline run $run failed"
+        fi
+        
+        # Stop proxy after each run
+        if [[ -n "$worker_port" ]]; then
+            stop_proxy_worker "$worker_port" "$worker_id"
+        else
+            stop_proxy
+        fi
+        sleep 1
+    done
+    
+    if [[ $baseline_success_count -eq 0 ]]; then
+        log "[$index] No successful baseline runs for $domain - skipping migration analysis"
+        return 1
+    fi
+    
+    log "[$index] Phase 1 completed: $baseline_success_count/$num_runs successful baseline runs"
+    
+    # ── Phase 2: Migration Analysis ──
+    log "[$index] Phase 2: Migration analysis for $domain ($num_runs runs)"
+    
+    # Restore migration settings
+    migrate_interface="$original_migrate"
+    
+    local migration_success_count=0
+    for ((run=1; run<=num_runs; run++)); do
+        log "  [$index] Migration run $run/$num_runs for $domain"
+        
+        # Start proxy with migration
+        if [[ -n "$worker_port" ]]; then
+            if ! start_proxy_worker "$interface" "$migrate_interface" "$worker_port" "$worker_id" "$(dirname "$migration_csv")"; then
+                error_log "Failed to start worker proxy for migration run $run of $domain"
+                continue
+            fi
+        else
+            if ! start_proxy "$interface" "$migrate_interface"; then
+                error_log "Failed to start proxy for migration run $run of $domain"
+                continue
+            fi
+        fi
+        
+        # Run migration test
+        cd "$CLIENT_SCRIPT_DIR"
+        local migration_success=false
+        if [[ -n "$worker_port" ]]; then
+            local report_port=$((9090 + worker_id * 10))
+            if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --proxy-port="$worker_port" --report-port="$report_port" --csv="$migration_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
+                migration_success=true
+            fi
+        else
+            if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --csv="$migration_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
+                migration_success=true
+            fi
+        fi
+        
+        if [[ "$migration_success" == "true" ]]; then
+            migration_success_count=$((migration_success_count + 1))
+            log "  [$index] Migration run $run successful"
+        else
+            log "  [$index] Migration run $run failed"
+        fi
+        
+        # Stop proxy after each run
+        if [[ -n "$worker_port" ]]; then
+            stop_proxy_worker "$worker_port" "$worker_id"
+        else
+            stop_proxy
+        fi
+        sleep 1
+    done
+    
+    log "[$index] Phase 2 completed: $migration_success_count/$num_runs successful migration runs"
+    
+    if [[ $migration_success_count -gt 0 ]]; then
+        log "[$index] Paired analysis completed successfully for $domain"
+        return 0
+    else
+        log "[$index] Paired analysis failed for $domain (no successful migration runs)"
+        return 1
+    fi
+}
+
+# MAD-only mode: Run MAD filtering on single interface until target runs achieved
+test_domain_mad_only() {
+    local domain="$1"
+    local index="$2"
+    local interface="$3"
+    local target_runs="$4"
+    local worker_id="${5:-""}"
+    local worker_port="${6:-""}"
+    
+    log "[$index] Starting MAD-only analysis for: $domain (target: $target_runs runs)"
+    
+    # Create CSV file for MAD-only mode
+    local worker_suffix=""
+    if [[ -n "$worker_id" ]]; then
+        worker_suffix="_worker_${worker_id}"
+    fi
+    
+    local worker_dir="${TIMESTAMPED_OUTPUT_DIR}/parallel_workers"
+    mkdir -p "$worker_dir"
+    
+    local mad_csv="${worker_dir}/mad_only_run_${interface}${worker_suffix}.csv"
+    
+    # Run MAD analysis on single interface
+    local results=()
+    local load_times=()
+    local data_amounts=()
+    local attempts=0
+    local max_attempts=$((target_runs * 2))
+    local consecutive_failures=0
+    local max_consecutive_failures=$target_runs
+    
+    while [[ ${#results[@]} -lt $target_runs && $attempts -lt $max_attempts && $consecutive_failures -lt $max_consecutive_failures ]]; do
+        attempts=$((attempts + 1))
+        log "  [$index] MAD-only run $attempts for $domain"
+        
+        # Start proxy for this run
+        if [[ -n "$worker_port" ]]; then
+            if ! start_proxy_worker "$interface" "" "$worker_port" "$worker_id" "$(dirname "$mad_csv")"; then
+                error_log "Failed to start worker proxy for MAD-only run $attempts of $domain (port $worker_port)"
+                continue
+            fi
+        else
+            if ! start_proxy "$interface" ""; then
+                error_log "Failed to start proxy for MAD-only run $attempts of $domain"
+                continue
+            fi
+        fi
+        
+        # Run test
+        cd "$CLIENT_SCRIPT_DIR"
+        local run_success=false
+        if [[ -n "$worker_port" ]]; then
+            local report_port=$((9090 + worker_id * 10))
+            if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --proxy-port="$worker_port" --report-port="$report_port" --csv="$mad_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
+                run_success=true
+            fi
+        else
+            if timeout "$TIMEOUT" node "$CLIENT_SCRIPT" --use-proxy --csv="$mad_csv" --url="$domain" >> "$LOG_FILE" 2>&1; then
+                run_success=true
+            fi
+        fi
+        
+        if [[ "$run_success" == "true" ]]; then
+            local parse_result=$(parse_csv_run_data "$mad_csv" "$domain" "mad_only")
+            if [[ "$parse_result" == SUCCESS* ]]; then
+                IFS='	' read -ra data <<< "$parse_result"
+                local load_time="${data[4]}"
+                local total_data="${data[5]}"
+                
+                results+=("$parse_result")
+                load_times+=("$load_time")
+                data_amounts+=("$total_data")
+                consecutive_failures=0
+                
+                log "  [$index] MAD-only run $attempts successful: load_time=$load_time, data=$total_data"
+            else
+                consecutive_failures=$((consecutive_failures + 1))
+                log "  [$index] MAD-only run $attempts failed: $parse_result (consecutive failures: $consecutive_failures)"
+            fi
+        else
+            consecutive_failures=$((consecutive_failures + 1))
+            log "  [$index] MAD-only run $attempts timed out or failed (consecutive failures: $consecutive_failures)"
+        fi
+        
+        # Stop proxy
+        if [[ -n "$worker_port" ]]; then
+            stop_proxy_worker "$worker_port" "$worker_id"
+        else
+            stop_proxy
+        fi
+        sleep 1
+    done
+    
+    # Check results and apply MAD filtering
+    if [[ ${#results[@]} -eq 0 ]]; then
+        log "[$index] No successful MAD-only runs for $domain"
+        return 1
+    fi
+    
+    if [[ ${#results[@]} -lt $target_runs ]]; then
+        log "[$index] Insufficient MAD-only runs for $domain: ${#results[@]}/$target_runs"
+        return 1
+    fi
+    
+    # Apply MAD filtering
+    log "[$index] Applying MAD filtering to $domain data amounts..."
+    local valid_indices=$(calculate_mad_outliers "${data_amounts[@]}")
+    local valid_results=()
+    local valid_load_times=()
+    local valid_data_amounts=()
+    
+    for idx in $valid_indices; do
+        valid_results+=("${results[$idx]}")
+        valid_load_times+=("${load_times[$idx]}")
+        valid_data_amounts+=("${data_amounts[$idx]}")
+    done
+    
+    if [[ ${#valid_results[@]} -lt $target_runs ]]; then
+        log "[$index] MAD filtering resulted in insufficient valid runs: ${#valid_results[@]}/$target_runs"
+        return 1
+    fi
+    
+    # Limit to exactly target_runs
+    if [[ ${#valid_results[@]} -gt $target_runs ]]; then
+        valid_load_times=("${valid_load_times[@]:0:$target_runs}")
+        valid_data_amounts=("${valid_data_amounts[@]:0:$target_runs}")
+    fi
+    
+    # Calculate statistics
+    local median_load=$(calculate_median "${valid_load_times[@]}")
+    local median_data=$(calculate_median "${valid_data_amounts[@]}")
+    
+    log "[$index] MAD-only analysis completed for $domain: med_load=$median_load, med_data=$median_data"
+    return 0
+}
+
+# MAD-based domain testing with baseline and migration phases (PAIR MODE)
 # QUICK SCAN MODE: Optimized for speed - calculates medians only, skips averages and unstable tracking
 test_domain_mad() {
     local domain="$1"
@@ -1513,9 +1844,18 @@ test_domain_mad() {
                 local total_data="${data[5]}"
                 local migrated_domains="${data[7]}"
                 
-                # Extract migrated data amount from CSV (column 24)
-                local csv_line=$(tail -n 1 "$migration_csv" | grep "^$domain,")
-                local migrated_data_amount=$(echo "$csv_line" | cut -d',' -f24)
+                # Extract migrated data amount from CSV (handle timestamp column)
+                local csv_line=$(grep ",$domain," "$migration_csv" | tail -1)
+                if [[ -z "$csv_line" ]]; then
+                    csv_line=$(tail -n 1 "$migration_csv" | grep "^$domain,")
+                fi
+                
+                # Detect timestamp column and adjust field number
+                local field_num=25  # Default: total_migrated_data_amount is column 25 (0-indexed: 24)
+                if [[ "$csv_line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z, ]]; then
+                    field_num=26  # With timestamp: shift by 1
+                fi
+                local migrated_data_amount=$(echo "$csv_line" | cut -d',' -f"$field_num")
                 
                 # Accept all successful runs initially
                 migration_results+=("$parse_result")
@@ -1659,11 +1999,20 @@ test_domain_mad() {
     
     for ((i=0; i<${#migration_results[@]}; i++)); do
         # Extract migrated data amount for this run from the original CSV line
-        local run_domain=$(echo "${migration_results[$i]}" | cut -d$'\t' -f1)
-        local csv_lines=$(grep "^$run_domain," "$migration_csv")
+        local run_domain=$(echo "${migration_results[$i]}" | cut -d$'\t' -f2)  # Use SNI field from parsed result
+        local csv_lines=$(grep ",$run_domain," "$migration_csv")
+        if [[ -z "$csv_lines" ]]; then
+            csv_lines=$(grep "^$run_domain," "$migration_csv")
+        fi
         local line_number=$((i + 1))
         local csv_line=$(echo "$csv_lines" | sed -n "${line_number}p")
-        local migrated_data_amount=$(echo "$csv_line" | cut -d',' -f24)
+        
+        # Detect timestamp column and adjust field number
+        local field_num=25  # Default: total_migrated_data_amount is column 25 (0-indexed: 24)
+        if [[ "$csv_line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z, ]]; then
+            field_num=26  # With timestamp: shift by 1
+        fi
+        local migrated_data_amount=$(echo "$csv_line" | cut -d',' -f"$field_num")
         
         all_migration_data+=("${migrated_data_amount:-0}")
         
@@ -1733,8 +2082,17 @@ test_domain_mad() {
                     local parse_result=$(parse_csv_run_data "$migration_csv" "$domain" "migration")
                     if [[ "$parse_result" == SUCCESS* ]]; then
                         # Check if this replacement run has migration data
-                        local csv_line=$(tail -n 1 "$migration_csv" | grep "^$domain,")
-                        local migrated_data_amount=$(echo "$csv_line" | cut -d',' -f24)
+                        local csv_line=$(grep ",$domain," "$migration_csv" | tail -1)
+                        if [[ -z "$csv_line" ]]; then
+                            csv_line=$(tail -n 1 "$migration_csv" | grep "^$domain,")
+                        fi
+                        
+                        # Detect timestamp column and adjust field number
+                        local field_num=25  # Default: total_migrated_data_amount is column 25 (0-indexed: 24)
+                        if [[ "$csv_line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z, ]]; then
+                            field_num=26  # With timestamp: shift by 1
+                        fi
+                        local migrated_data_amount=$(echo "$csv_line" | cut -d',' -f"$field_num")
                         
                         if [[ -n "$migrated_data_amount" && $(echo "$migrated_data_amount > 0" | bc -l) == "1" ]]; then
                             # This replacement run has migration data - accept it
@@ -2162,20 +2520,29 @@ run_scan() {
             log "Progress ($interface): $current/$scan_count (Global: #$global_index) - $domain"
         fi
         
-        if [[ -n "$MAD_MODE" ]]; then
-            # MAD analysis mode
-            if test_domain_mad "$domain" "$global_index" "$interface" "$migrate_interface" "$MAD_TARGET_RUNS"; then
-                if [[ -n "$migrate_interface" ]]; then
-                    log "[$global_index] MAD analysis completed: $domain (using $interface -> $migrate_interface migration)"
+        if [[ "$PAIR_MODE" == "true" && -n "$migrate_interface" ]]; then
+            # Paired mode: baseline + migration phases
+            if [[ -n "$MAD_MODE" ]]; then
+                # MAD Paired mode
+                if test_domain_mad "$domain" "$global_index" "$interface" "$migrate_interface" "$MAD_TARGET_RUNS"; then
+                    log "[$global_index] MAD paired analysis completed: $domain (using $interface -> $migrate_interface migration)"
                 else
-                    log "[$global_index] MAD analysis completed: $domain (using $interface)"
+                    error_log "MAD paired analysis failed: $domain (using $interface -> $migrate_interface migration)"
                 fi
             else
-                if [[ -n "$migrate_interface" ]]; then
-                    error_log "MAD analysis failed: $domain (using $interface -> $migrate_interface migration)"
+                # Regular Paired mode
+                if test_domain_paired "$domain" "$global_index" "$interface" "$migrate_interface" "$NUM_RUNS"; then
+                    log "[$global_index] Paired analysis completed: $domain (using $interface -> $migrate_interface migration)"
                 else
-                    error_log "MAD analysis failed: $domain (using $interface)"
+                    error_log "Paired analysis failed: $domain (using $interface -> $migrate_interface migration)"
                 fi
+            fi
+        elif [[ -n "$MAD_MODE" ]]; then
+            # MAD-only mode: single interface with MAD filtering
+            if test_domain_mad_only "$domain" "$global_index" "$interface" "$MAD_TARGET_RUNS"; then
+                log "[$global_index] MAD-only analysis completed: $domain (using $interface)"
+            else
+                error_log "MAD-only analysis failed: $domain (using $interface)"
             fi
         else
             # Regular mode
@@ -2447,7 +2814,17 @@ main() {
         log "Mode: Direct connection (no proxy)"
         log "CSV file: ${CSV_FILE}_direct.csv"
     elif [[ -n "$INTERFACE" ]]; then
-        if [[ -n "$MIGRATE" ]]; then
+        if [[ "$PAIR_MODE" == "true" && -n "$MIGRATE" ]]; then
+            if [[ -n "$MAD_MODE" ]]; then
+                log "Mode: MAD Paired Analysis ($INTERFACE -> $MIGRATE, $MAD_TARGET_RUNS runs per phase)"
+            else
+                log "Mode: Paired Analysis ($INTERFACE -> $MIGRATE, $NUM_RUNS runs per phase)"
+            fi
+            log "CSV file: ${CSV_FILE}_${INTERFACE}_migrate_${MIGRATE}.csv"
+        elif [[ -n "$MAD_MODE" && "$PAIR_MODE" == "false" ]]; then
+            log "Mode: MAD-only Analysis ($INTERFACE, $MAD_TARGET_RUNS runs with filtering)"
+            log "CSV file: ${CSV_FILE}_${INTERFACE}.csv"
+        elif [[ -n "$MIGRATE" ]]; then
             log "Mode: Single interface with migration ($INTERFACE -> $MIGRATE)"
             log "CSV file: ${CSV_FILE}_${INTERFACE}_migrate_${MIGRATE}.csv"
         else
@@ -2476,11 +2853,25 @@ main() {
             log "Starting parallel scan ($PARALLEL_JOBS workers) with $INTERFACE interface..."
             run_parallel_scan "$INTERFACE" "$MIGRATE"
         else
-            # Sequential execution  
-            if [[ -n "$MIGRATE" ]]; then
+            # Sequential execution
+            if [[ "$PAIR_MODE" == "true" && -n "$MIGRATE" ]]; then
+                # Paired Mode: Baseline + Migration phases (works with any --num)
+                if [[ -n "$MAD_MODE" ]]; then
+                    log "Scanning with $INTERFACE interface and migration to $MIGRATE (MAD paired mode)..."
+                else
+                    log "Scanning with $INTERFACE interface and migration to $MIGRATE (paired mode)..."
+                fi
+                run_scan "$INTERFACE" "$MIGRATE"
+            elif [[ -n "$MAD_MODE" && "$PAIR_MODE" == "false" ]]; then
+                # MAD-only Mode: Just MAD filtering on single interface
+                log "Scanning with $INTERFACE interface (MAD-only mode)..."
+                run_scan "$INTERFACE" ""
+            elif [[ -n "$MIGRATE" ]]; then
+                # Regular migration mode
                 log "Scanning with $INTERFACE interface and migration to $MIGRATE..."
                 run_scan "$INTERFACE" "$MIGRATE"
             else
+                # Single interface mode
                 log "Scanning with $INTERFACE interface..."
                 run_scan "$INTERFACE" ""
             fi
