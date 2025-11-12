@@ -317,7 +317,7 @@ start_proxy_worker() {
             kill -9 $report_pids 2>/dev/null || true
         fi
     fi
-    sleep 0.3
+    sleep 0.5
     
     cd "$(dirname "$PROXY_SCRIPT")"
     
@@ -363,7 +363,7 @@ stop_proxy_worker() {
     pkill -f "cargo run.*quiche_server.*$port" 2>/dev/null || true
     
     # Force kill if needed
-    sleep 0.3
+    sleep 0.5
     pkill -9 -f "quiche_server.*$port" 2>/dev/null || true
     pkill -9 -f "script_proxy.*$port" 2>/dev/null || true
     
@@ -382,7 +382,7 @@ stop_proxy_worker() {
         fi
     fi
     
-    sleep 0.3
+    sleep 0.5
 }
 
 # Run parallel worker process
@@ -484,7 +484,7 @@ run_parallel_worker() {
                 fi
                 
                 # Wait for proxy to be ready
-                sleep 0.2
+                sleep 0.5
                 
                 # Calculate report port for this worker (same as in start_proxy_worker)
                 local report_port=$((9090 + worker_id * 10))
@@ -759,7 +759,7 @@ stop_proxy() {
     fi
     
     # Wait and verify
-    sleep 0.3
+    sleep 0.5
     if pgrep -f "quiche_server" > /dev/null; then
         error_log "Warning: Some proxy processes may still be running"
         # Final aggressive cleanup
