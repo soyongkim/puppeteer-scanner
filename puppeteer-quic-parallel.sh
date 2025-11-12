@@ -492,27 +492,8 @@ run_parallel_worker() {
                     continue
                 fi
                 
-                # Wait for proxy with adaptive checking + minimum QUIC stabilization time
-                local proxy_ready_attempts=0
-                local proxy_ready=false
-                
-                while [[ $proxy_ready_attempts -lt 15 ]]; do
-                    if nc -z localhost "$worker_port" 2>/dev/null && pgrep -f "quiche_server.*$worker_port" > /dev/null; then
-                        proxy_ready=true
-                        break
-                    fi
-                    sleep 0.1
-                    proxy_ready_attempts=$((proxy_ready_attempts + 1))
-                done
-                
-                # Ensure minimum stabilization time for QUIC connections
-                if [[ $proxy_ready == true ]]; then
-                    # Wait additional time for QUIC server to fully initialize
-                    sleep 0.8
-                else
-                    # If basic checks failed, wait longer
-                    sleep 1.2
-                fi
+                # Wait for proxy to be ready
+                sleep 1
                 
                 # Calculate report port for this worker (same as in start_proxy_worker)
                 local report_port=$((9090 + worker_id * 10))
@@ -528,6 +509,7 @@ run_parallel_worker() {
                 
                 # Stop proxy after each run
                 stop_proxy_worker "$worker_port" "$worker_id"
+                sleep 1  # Brief pause between runs
             done
         fi
         
