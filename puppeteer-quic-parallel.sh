@@ -492,15 +492,27 @@ run_parallel_worker() {
                     continue
                 fi
                 
-                # Wait for proxy to be ready with adaptive checking
+                # Wait for proxy with adaptive checking + minimum QUIC stabilization time
                 local proxy_ready_attempts=0
-                while [[ $proxy_ready_attempts -lt 10 ]]; do
+                local proxy_ready=false
+                
+                while [[ $proxy_ready_attempts -lt 15 ]]; do
                     if nc -z localhost "$worker_port" 2>/dev/null && pgrep -f "quiche_server.*$worker_port" > /dev/null; then
-                        break  # Proxy is ready
+                        proxy_ready=true
+                        break
                     fi
                     sleep 0.1
                     proxy_ready_attempts=$((proxy_ready_attempts + 1))
                 done
+                
+                # Ensure minimum stabilization time for QUIC connections
+                if [[ $proxy_ready == true ]]; then
+                    # Wait additional time for QUIC server to fully initialize
+                    sleep 0.8
+                else
+                    # If basic checks failed, wait longer
+                    sleep 1.2
+                fi
                 
                 # Calculate report port for this worker (same as in start_proxy_worker)
                 local report_port=$((9090 + worker_id * 10))
@@ -713,15 +725,27 @@ start_proxy() {
     fi
     PROXY_PID=$!
     
-    # Wait for Rust process to compile and start with adaptive checking
+    # Wait for Rust process with adaptive checking + minimum QUIC stabilization
     local rust_startup_attempts=0
-    while [[ $rust_startup_attempts -lt 15 ]]; do
-        if pgrep -f "quiche_server" > /dev/null; then
-            break  # Rust process started
+    local rust_ready=false
+    
+    while [[ $rust_startup_attempts -lt 20 ]]; do
+        if pgrep -f "quiche_server" > /dev/null && nc -z localhost 4433 2>/dev/null; then
+            rust_ready=true
+            break
         fi
         sleep 0.2
         rust_startup_attempts=$((rust_startup_attempts + 1))
     done
+    
+    # Minimum stabilization time for QUIC server
+    if [[ $rust_ready == true ]]; then
+        # Allow QUIC server to fully initialize internal state
+        sleep 0.8
+    else
+        # If startup detection failed, wait longer
+        sleep 1.5
+    fi
     
     # Check if quiche_server process is running (the actual Rust process)
     if pgrep -f "quiche_server" > /dev/null; then
