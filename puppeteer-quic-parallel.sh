@@ -317,7 +317,7 @@ start_proxy_worker() {
             kill -9 $report_pids 2>/dev/null || true
         fi
     fi
-    sleep 1
+    sleep 0.3
     
     cd "$(dirname "$PROXY_SCRIPT")"
     
@@ -343,7 +343,7 @@ start_proxy_worker() {
         if nc -z localhost "$port" 2>/dev/null; then
             return 0  # Success
         fi
-        sleep 1
+        sleep 0.2
         attempts=$((attempts + 1))
     done
     
@@ -363,7 +363,7 @@ stop_proxy_worker() {
     pkill -f "cargo run.*quiche_server.*$port" 2>/dev/null || true
     
     # Force kill if needed
-    sleep 1
+    sleep 0.3
     pkill -9 -f "quiche_server.*$port" 2>/dev/null || true
     pkill -9 -f "script_proxy.*$port" 2>/dev/null || true
     
@@ -382,7 +382,7 @@ stop_proxy_worker() {
         fi
     fi
     
-    sleep 1
+    sleep 0.3
 }
 
 # Run parallel worker process
@@ -484,7 +484,7 @@ run_parallel_worker() {
                 fi
                 
                 # Wait for proxy to be ready
-                sleep 1
+                sleep 0.2
                 
                 # Calculate report port for this worker (same as in start_proxy_worker)
                 local report_port=$((9090 + worker_id * 10))
@@ -500,7 +500,6 @@ run_parallel_worker() {
                 
                 # Stop proxy after each run
                 stop_proxy_worker "$worker_port" "$worker_id"
-                sleep 1  # Brief pause between runs
             done
         fi
         
@@ -677,7 +676,7 @@ start_proxy() {
     pkill -f "script_proxy.sh" 2>/dev/null || true
     pkill -f "quiche_server" 2>/dev/null || true
     pkill -f "cargo run" 2>/dev/null || true
-    sleep 1
+    sleep 0.3
     
     # Start proxy in background with specified interface and optional migration
     cd "$(dirname "$PROXY_SCRIPT")"
@@ -699,7 +698,7 @@ start_proxy() {
     PROXY_PID=$!
     
     # Wait longer for Rust process to compile and start
-    sleep 1
+    sleep 0.5
     
     # Check if quiche_server process is running (the actual Rust process)
     if pgrep -f "quiche_server" > /dev/null; then
@@ -737,7 +736,7 @@ stop_proxy() {
     pkill -f "cargo run.*quiche_server" 2>/dev/null || true
     
     # Force kill if still running
-    sleep 1
+    sleep 0.3
     pkill -9 -f "quiche_server" 2>/dev/null || true
     pkill -9 -f "cargo run.*quiche_server" 2>/dev/null || true
     pkill -9 -f "script_proxy.sh" 2>/dev/null || true
@@ -760,7 +759,7 @@ stop_proxy() {
     fi
     
     # Wait and verify
-    sleep 1
+    sleep 0.3
     if pgrep -f "quiche_server" > /dev/null; then
         error_log "Warning: Some proxy processes may still be running"
         # Final aggressive cleanup
@@ -1249,7 +1248,6 @@ test_domain_paired() {
         else
             stop_proxy
         fi
-        sleep 1
     done
     
     if [[ $baseline_success_count -eq 0 ]]; then
@@ -1309,7 +1307,6 @@ test_domain_paired() {
         else
             stop_proxy
         fi
-        sleep 1
     done
     
     log "[$index] Phase 2 completed: $migration_success_count/$num_runs successful migration runs"
@@ -1413,7 +1410,6 @@ test_domain_mad_only() {
         else
             stop_proxy
         fi
-        sleep 1
     done
     
     # Check results and apply MAD filtering
@@ -1617,7 +1613,6 @@ test_domain_mad() {
         else
             stop_proxy
         fi
-        sleep 1
     done
     
     # Check if we stopped due to consecutive failures
@@ -1751,7 +1746,6 @@ test_domain_mad() {
         else
             stop_proxy
         fi
-        sleep 1
     done
     
     if [[ ${#valid_baseline_results[@]} -lt $target_runs ]]; then
@@ -1882,7 +1876,6 @@ test_domain_mad() {
         else
             stop_proxy
         fi
-        sleep 1
     done
     
     # Stage 2: Check migration capability and decide strategy
@@ -1981,7 +1974,6 @@ test_domain_mad() {
         else
             stop_proxy
         fi
-        sleep 1
     done
     
     if [[ ${#migration_results[@]} -lt $target_runs ]]; then
@@ -2123,7 +2115,6 @@ test_domain_mad() {
                 else
                     stop_proxy
                 fi
-                sleep 1
             done
         fi
         
