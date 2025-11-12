@@ -362,8 +362,17 @@ stop_proxy_worker() {
     pkill -f "script_proxy.*$port" 2>/dev/null || true
     pkill -f "cargo run.*quiche_server.*$port" 2>/dev/null || true
     
-    # Force kill if needed
-    sleep 0.5
+    # Wait for processes to terminate, with adaptive checking
+    local cleanup_attempts=0
+    while [[ $cleanup_attempts -lt 10 ]]; do
+        if ! pgrep -f "quiche_server.*$port" > /dev/null && ! pgrep -f "script_proxy.*$port" > /dev/null; then
+            break  # Processes terminated successfully
+        fi
+        sleep 0.1
+        cleanup_attempts=$((cleanup_attempts + 1))
+    done
+    
+    # Force kill if still running after adaptive wait
     pkill -9 -f "quiche_server.*$port" 2>/dev/null || true
     pkill -9 -f "script_proxy.*$port" 2>/dev/null || true
     
@@ -483,8 +492,15 @@ run_parallel_worker() {
                     continue
                 fi
                 
-                # Wait for proxy to be ready
-                sleep 0.5
+                # Wait for proxy to be ready with adaptive checking
+                local proxy_ready_attempts=0
+                while [[ $proxy_ready_attempts -lt 10 ]]; do
+                    if nc -z localhost "$worker_port" 2>/dev/null && pgrep -f "quiche_server.*$worker_port" > /dev/null; then
+                        break  # Proxy is ready
+                    fi
+                    sleep 0.1
+                    proxy_ready_attempts=$((proxy_ready_attempts + 1))
+                done
                 
                 # Calculate report port for this worker (same as in start_proxy_worker)
                 local report_port=$((9090 + worker_id * 10))
@@ -697,8 +713,15 @@ start_proxy() {
     fi
     PROXY_PID=$!
     
-    # Wait longer for Rust process to compile and start
-    sleep 0.5
+    # Wait for Rust process to compile and start with adaptive checking
+    local rust_startup_attempts=0
+    while [[ $rust_startup_attempts -lt 15 ]]; do
+        if pgrep -f "quiche_server" > /dev/null; then
+            break  # Rust process started
+        fi
+        sleep 0.2
+        rust_startup_attempts=$((rust_startup_attempts + 1))
+    done
     
     # Check if quiche_server process is running (the actual Rust process)
     if pgrep -f "quiche_server" > /dev/null; then
@@ -758,8 +781,18 @@ stop_proxy() {
         fi
     fi
     
-    # Wait and verify
-    sleep 0.5
+    # Verify cleanup with adaptive checking
+    local cleanup_verify_attempts=0
+    while [[ $cleanup_verify_attempts -lt 10 ]]; do
+        if ! pgrep -f "quiche_server" > /dev/null; then
+            log "Proxy stopped"
+            return 0
+        fi
+        sleep 0.1
+        cleanup_verify_attempts=$((cleanup_verify_attempts + 1))
+    done
+    
+    # If still running after adaptive wait
     if pgrep -f "quiche_server" > /dev/null; then
         error_log "Warning: Some proxy processes may still be running"
         # Final aggressive cleanup
