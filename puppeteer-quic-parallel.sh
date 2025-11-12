@@ -304,21 +304,6 @@ start_proxy_worker() {
     local worker_id="$4"
     local worker_output_dir="$5"
     
-    # Calculate unique report port for this worker (base 9090 + worker_id * 10)
-    local report_port=$((9090 + worker_id * 10))
-    
-    # Kill any existing proxy processes on this specific port
-    pkill -f "quiche_server.*$port" 2>/dev/null || true
-    pkill -f "script_proxy.*$port" 2>/dev/null || true
-    # Also kill any processes on the report port
-    if command -v lsof >/dev/null 2>&1; then
-        local report_pids=$(lsof -ti:$report_port 2>/dev/null || true)
-        if [[ -n "$report_pids" ]]; then
-            kill -9 $report_pids 2>/dev/null || true
-        fi
-    fi
-    sleep 0.5
-    
     cd "$(dirname "$PROXY_SCRIPT")"
     
     # Build proxy command arguments with custom port and report port
@@ -354,44 +339,43 @@ stop_proxy_worker() {
     local port="$1"
     local worker_id="$2"
     
-    # Calculate the report port for this worker
-    local report_port=$((9090 + worker_id * 10))
-    
     # Kill processes specific to this port
     pkill -f "quiche_server.*$port" 2>/dev/null || true
     pkill -f "script_proxy.*$port" 2>/dev/null || true
-    pkill -f "cargo run.*quiche_server.*$port" 2>/dev/null || true
     
-    # Wait for processes to terminate, with adaptive checking
+    # Wait for processes to terminate AND ports to be unbound
     local cleanup_attempts=0
     while [[ $cleanup_attempts -lt 10 ]]; do
-        if ! pgrep -f "quiche_server.*$port" > /dev/null && ! pgrep -f "script_proxy.*$port" > /dev/null; then
-            break  # Processes terminated successfully
+        local processes_stopped=true
+        local ports_free=true
+        
+        # Check if processes are terminated
+        if pgrep -f "quiche_server.*$port" > /dev/null || pgrep -f "script_proxy.*$port" > /dev/null; then
+            processes_stopped=false
         fi
-        sleep 0.1
+        
+        # Check if ports are unbound
+        if nc -z localhost "$port" 2>/dev/null || nc -z localhost "$report_port" 2>/dev/null; then
+            ports_free=false
+        fi
+        
+        # Both conditions must be met
+        if [[ $processes_stopped == true && $ports_free == true ]]; then
+            break  # Complete cleanup successful
+        fi
+        
+        sleep 0.2
         cleanup_attempts=$((cleanup_attempts + 1))
     done
     
-    # Force kill if still running after adaptive wait
-    pkill -9 -f "quiche_server.*$port" 2>/dev/null || true
-    pkill -9 -f "script_proxy.*$port" 2>/dev/null || true
-    
-    # Also kill by port using lsof if available
+    # Force cleanup using lsof if ports are still bound
     if command -v lsof >/dev/null 2>&1; then
         # Kill QUIC proxy port
         local pids=$(lsof -ti:$port 2>/dev/null || true)
         if [[ -n "$pids" ]]; then
             kill -9 $pids 2>/dev/null || true
         fi
-        
-        # Kill dedicated report server port for this worker
-        local report_pids=$(lsof -ti:$report_port 2>/dev/null || true)
-        if [[ -n "$report_pids" ]]; then
-            kill -9 $report_pids 2>/dev/null || true
-        fi
     fi
-    
-    sleep 0.5
 }
 
 # Run parallel worker process
@@ -491,10 +475,7 @@ run_parallel_worker() {
                     worker_log "Failed to start proxy for $domain run $run"
                     continue
                 fi
-                
-                # Wait for proxy to be ready
-                sleep 1
-                
+                                
                 # Calculate report port for this worker (same as in start_proxy_worker)
                 local report_port=$((9090 + worker_id * 10))
                 
@@ -509,7 +490,6 @@ run_parallel_worker() {
                 
                 # Stop proxy after each run
                 stop_proxy_worker "$worker_port" "$worker_id"
-                sleep 1  # Brief pause between runs
             done
         fi
         
@@ -2430,10 +2410,7 @@ test_domain() {
         log "  Stopping proxy after run $run_number/$NUM_RUNS"
         stop_proxy
         
-        # Small delay between runs (except for the last one)
-        if [[ $run_number -lt $NUM_RUNS ]]; then
-            sleep 1  # Delay to ensure proxy fully stops
-        fi
+        # No delay needed - proxy cleanup is handled in stop_proxy
         
         run_number=$((run_number + 1))
     done
@@ -2453,8 +2430,7 @@ test_domain() {
         fi
     fi
     
-    # Small delay between domains
-    sleep 1
+    # No delay needed between domains in parallel execution
     
     # Return success if at least one run succeeded
     return $([[ $success_count -gt 0 ]] && echo 0 || echo 1)
@@ -2796,16 +2772,23 @@ cleanup() {
         fi
     fi
     
-    # Kill processes bound to proxy ports (4433 and custom worker ports)
-    for port in 4433 4500 4600 4700 4501 5002 4764; do
-        if command -v lsof >/dev/null 2>&1; then
-            local pids=$(lsof -ti:$port 2>/dev/null || true)
-            if [[ -n "$pids" ]]; then
-                log "Killing processes on port $port: $pids"
-                kill -9 $pids 2>/dev/null || true
+    # Kill processes bound to any proxy ports (dynamically discover from quiche_server processes)
+    if command -v lsof >/dev/null 2>&1; then
+        # Find all ports used by quiche_server processes
+        local quiche_ports=$(lsof -i -P | grep "quiche_server" | awk '{print $9}' | grep ":" | cut -d':' -f2 | sort -u)
+        
+        # Kill processes on discovered ports + standard ports
+        local all_ports="4433 9090 $quiche_ports"
+        for port in $all_ports; do
+            if [[ "$port" =~ ^[0-9]+$ ]]; then  # Validate port is numeric
+                local pids=$(lsof -ti:$port 2>/dev/null || true)
+                if [[ -n "$pids" ]]; then
+                    log "Killing processes on port $port: $pids"
+                    kill -9 $pids 2>/dev/null || true
+                fi
             fi
-        fi
-    done
+        done
+    fi
     
     # Clean up temporary files
     rm -f "$TIMESTAMPED_OUTPUT_DIR"/temp_*.csv
