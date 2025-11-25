@@ -186,6 +186,7 @@ install_chrome_dependencies() {
     if command -v apt-get &> /dev/null; then
         echo " Installing Chrome dependencies via apt-get..."
         sudo apt-get update -qq
+        # Install Chrome dependencies
         sudo apt-get install -y -qq \
             wget \
             unzip \
@@ -193,16 +194,29 @@ install_chrome_dependencies() {
             libatk-bridge2.0-0 \
             libdrm2 \
             libxss1 \
-            libgconf-2-4 \
             libxrandr2 \
-            libasound2 \
             libpangocairo-1.0-0 \
             libatk1.0-0 \
             libcairo-gobject2 \
             libgtk-3-0 \
             libgdk-pixbuf2.0-0 \
             libgbm1 \
-            libxshmfence1
+            libxshmfence1 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxkbcommon0 \
+            libatspi2.0-0 \
+            fonts-liberation \
+            libcups2 \
+            libdbus-1-3 \
+            libxcb1 \
+            libxkbcommon0 \
+            libx11-6 \
+            libxcb-dri3-0 \
+            ca-certificates
+        # Try to install libasound2t64, fallback to libasound2 for older systems
+        sudo apt-get install -y -qq libasound2t64 2>/dev/null || sudo apt-get install -y -qq libasound2 || true
         echo " Chrome dependencies installed successfully"
     elif command -v yum &> /dev/null; then
         echo " Installing Chrome dependencies via yum..."
@@ -246,8 +260,8 @@ install_chrome_dependencies() {
         echo " Chrome dependencies installed successfully"
     else
         echo " Could not detect package manager. You may need to install Chrome dependencies manually:"
-        echo "   Ubuntu/Debian: sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libgconf-2-4 libxrandr2 libasound2 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0 libgbm1 libxshmfence1"
-        echo "   CentOS/RHEL: sudo yum install nss atk at-spi2-atk libdrm libxss GConf2 libXrandr alsa-lib pango cairo-gobject gtk3 gdk-pixbuf2 mesa-libgbm libxshmfence"
+        echo "   Ubuntu/Debian: sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libxrandr2 libasound2t64 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0 libgbm1 libxshmfence1 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libatspi2.0-0 fonts-liberation"
+        echo "   CentOS/RHEL: sudo yum install nss atk at-spi2-atk libdrm libxss libXrandr alsa-lib pango cairo-gobject gtk3 gdk-pixbuf2 mesa-libgbm libxshmfence"
     fi
 }
 
@@ -311,8 +325,8 @@ else
             echo " Chrome Headless Shell binary may have issues (version check failed)"
             echo "   This might be due to missing system dependencies or an incompatible system."
             echo "   If issues persist, you may need to install additional dependencies manually:"
-            echo "   Ubuntu/Debian: sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libgconf-2-4 libxrandr2 libasound2 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0 libgbm1 libxshmfence1"
-            echo "   CentOS/RHEL: sudo yum install nss atk at-spi2-atk libdrm libxss GConf2 libXrandr alsa-lib pango cairo-gobject gtk3 gdk-pixbuf2 mesa-libgbm libxshmfence"
+            echo "   Ubuntu/Debian: sudo apt-get install libnss3 libatk-bridge2.0-0 libdrm2 libxss1 libxrandr2 libasound2t64 libpangocairo-1.0-0 libatk1.0-0 libcairo-gobject2 libgtk-3-0 libgdk-pixbuf2.0-0 libgbm1 libxshmfence1 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libatspi2.0-0 fonts-liberation"
+            echo "   CentOS/RHEL: sudo yum install nss atk at-spi2-atk libdrm libxss libXrandr alsa-lib pango cairo-gobject gtk3 gdk-pixbuf2 mesa-libgbm libxshmfence"
         fi
     else
         echo " Chrome Headless Shell extraction failed"
