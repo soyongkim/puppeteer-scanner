@@ -66,9 +66,9 @@ export function updateDomainResourceType(domain, resourceType, status = 'request
  * @param {boolean} debugMode - Debug logging enabled
  * @returns {boolean} Whether the redirect is valid
  */
-function validateRedirectCandidate(targetDomain, candidateDomain, proxyStats, useProxy, debugMode) {
-  if (!useProxy || !proxyStats || !proxyStats.connections_detail) {
-    // Without proxy, accept all valid redirects (but this is risky)
+function validateRedirectCandidate(targetDomain, candidateDomain, proxyStats, hasAggregateServer, debugMode) {
+  if (!hasAggregateServer || !proxyStats || !proxyStats.connections_detail) {
+    // Without aggregate server/proxy, accept all valid redirects
     return true;
   }
 
@@ -79,7 +79,7 @@ function validateRedirectCandidate(targetDomain, candidateDomain, proxyStats, us
            candidateDomain.includes(conn.domain);
   });
   
-  debug(`[REDIRECT-VALIDATION] Checking if ${candidateDomain} matches proxy connections: ${isValid}`, debugMode);
+  debug(`[REDIRECT-VALIDATION] Checking if ${candidateDomain} matches connections: ${isValid}`, debugMode);
   return isValid;
 }
 
@@ -91,24 +91,39 @@ function validateRedirectCandidate(targetDomain, candidateDomain, proxyStats, us
  * @param {boolean} debugMode - Debug logging enabled
  * @returns {string} IP address or null
  */
-function extractRedirectIP(domain, proxyStats, useProxy, debugMode) {
-  if (!useProxy || !proxyStats || !proxyStats.connections_detail) {
-    return null;
+/**
+ * Extract IP address for redirected domain
+ * @param {string} domain - Domain to get IP for
+ * @param {Object} proxyStats - Proxy/aggregate statistics
+ * @param {boolean} hasAggregateServer - Whether aggregate server is available
+ * @param {Map} domainToIP - Map of domains to IPs from CDP
+ * @param {boolean} debugMode - Debug mode flag
+ * @returns {string|null} IP address or null
+ */
+function extractRedirectIP(domain, proxyStats, hasAggregateServer, domainToIP, debugMode) {
+  // First try CDP tracking (works with or without proxy/aggregate)
+  if (domainToIP && domainToIP.has(domain)) {
+    const ip = domainToIP.get(domain);
+    debug(`[REDIRECT-IP] Found IP from CDP for ${domain}: ${ip}`, debugMode);
+    return ip;
   }
 
-  // Try direct match first
-  const redirectIPInfo = extractRealIPFromProxy(domain, proxyStats);
-  if (redirectIPInfo) {
-    debug(`[REDIRECT-IP] Found IP for ${domain}: ${redirectIPInfo.ip}`, debugMode);
-    return redirectIPInfo.ip;
-  }
+  // If using aggregate server, try stats
+  if (hasAggregateServer && proxyStats && proxyStats.connections_detail) {
+    // Try direct match first
+    const redirectIPInfo = extractRealIPFromProxy(domain, proxyStats);
+    if (redirectIPInfo) {
+      debug(`[REDIRECT-IP] Found IP for ${domain}: ${redirectIPInfo.ip}`, debugMode);
+      return redirectIPInfo.ip;
+    }
 
-  // Try partial matching as fallback
-  const allConnections = parseConnectionsDetail(proxyStats.connections_detail);
-  for (const conn of allConnections) {
-    if (conn.ip && (conn.domain.includes(domain) || domain.includes(conn.domain))) {
-      debug(`[REDIRECT-IP] Found IP via partial match for ${domain}: ${conn.ip}`, debugMode);
-      return conn.ip;
+    // Try partial matching as fallback
+    const allConnections = parseConnectionsDetail(proxyStats.connections_detail);
+    for (const conn of allConnections) {
+      if (conn.ip && (conn.domain.includes(domain) || domain.includes(conn.domain))) {
+        debug(`[REDIRECT-IP] Found IP via partial match for ${domain}: ${conn.ip}`, debugMode);
+        return conn.ip;
+      }
     }
   }
 
@@ -155,13 +170,18 @@ function getRedirectInfo(global, debugMode) {
  * @param {Object} params.global - Global redirect info object
  * @returns {Object} Redirect analysis results
  */
-export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy, global, debugMode = false }) {
+/**
+ * Analyze redirect and IP information
+ * @param {Object} params - Parameters object
+ * @returns {Object} Redirect analysis results
+ */
+export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy, hasAggregateServer, global, domainToIP, debugMode = false }) {
   let redirectedDomain = '-';
   let originalIP = '-';
   let redirectedIP = '-';
   
-  // Get IP for original requested domain from proxy connection info
-  if (useProxy && proxyStats && proxyStats.connections_detail) {
+  // Get IP for original requested domain from proxy/aggregate connection info
+  if (hasAggregateServer && proxyStats && proxyStats.connections_detail) {
     const originalIPInfo = extractRealIPFromProxy(targetUrl, proxyStats);
     if (originalIPInfo) {
       originalIP = originalIPInfo.ip;
@@ -176,6 +196,21 @@ export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy
           break;
         }
       }
+    }
+  } else if (domainToIP && domainToIP.has(targetUrl)) {
+    // When aggregate server is not used, get IP from CDP tracking
+    originalIP = domainToIP.get(targetUrl);
+    debug(`[ORIGINAL-IP] Found IP from CDP for ${targetUrl}: ${originalIP}`, debugMode);
+  } else if (response && response.remoteAddress) {
+    // Fallback to response IP when available
+    try {
+      const remoteAddr = response.remoteAddress();
+      if (remoteAddr && remoteAddr.ip) {
+        originalIP = remoteAddr.ip;
+        debug(`[ORIGINAL-IP] Found IP from response for ${targetUrl}: ${originalIP}`, debugMode);
+      }
+    } catch (ipError) {
+      debug(`⚠️ Error extracting IP from response: ${ipError.message}`, debugMode);
     }
   }
   
@@ -198,13 +233,13 @@ export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy
       const locationDomain = locationUrlObj.hostname;
       
       if (targetUrl !== locationDomain) {
-        if (validateRedirectCandidate(targetUrl, locationDomain, proxyStats, useProxy, debugMode)) {
+        if (validateRedirectCandidate(targetUrl, locationDomain, proxyStats, hasAggregateServer, debugMode)) {
           redirectedDomain = locationDomain;
           redirectDetected = true;
-          redirectedIP = extractRedirectIP(locationDomain, proxyStats, useProxy, debugMode);
+          redirectedIP = extractRedirectIP(locationDomain, proxyStats, hasAggregateServer, domainToIP, debugMode);
           debug(`[LOCATION-HEADER] Valid redirection detected: ${targetUrl} -> ${locationDomain} (HTTP ${redirectInfo.redirectStatus})`, debugMode);
         } else {
-          debug(`[LOCATION-REJECTED] Location header ${locationDomain} not found in proxy connections - ignoring redirect`, debugMode);
+          debug(`[LOCATION-REJECTED] Location header ${locationDomain} not found in connections - ignoring redirect`, debugMode);
         }
       }
       
@@ -225,12 +260,12 @@ export function analyzeRedirectAndIP({ targetUrl, response, proxyStats, useProxy
       const finalDomain = finalUrlObj.hostname;
       
       if (targetUrl !== finalDomain) {
-        if (validateRedirectCandidate(targetUrl, finalDomain, proxyStats, useProxy, debugMode)) {
+        if (validateRedirectCandidate(targetUrl, finalDomain, proxyStats, hasAggregateServer, debugMode)) {
           redirectedDomain = finalDomain;
-          redirectedIP = extractRedirectIP(finalDomain, proxyStats, useProxy, debugMode);
+          redirectedIP = extractRedirectIP(finalDomain, proxyStats, hasAggregateServer, domainToIP, debugMode);
           debug(`[RESPONSE-URL] Valid redirection detected: ${targetUrl} -> ${finalDomain}`, debugMode);
         } else {
-          debug(`[RESPONSE-REJECTED] Final URL ${finalDomain} not found in proxy connections - ignoring redirect`, debugMode);
+          debug(`[RESPONSE-REJECTED] Final URL ${finalDomain} not found in connections - ignoring redirect`, debugMode);
         }
       } else {
         debug(`📍 No redirection detected: ${targetUrl} (final: ${finalDomain})`, debugMode);

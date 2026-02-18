@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# Kill Scanner - Emergency cleanup script for puppeteer-quic-parallel.sh
+# Kill Scanner - Emergency cleanup script for puppeteer scanners
 # Usage: ./kill-puppeteer-parallel-scanner.sh
-# This script forcefully stops all processes related to the QUIC puppeteer scanner
+# This script forcefully stops all processes related to puppeteer scanners:
+# - puppeteer-quic-parallel.sh (original scanner)
+# - puppeteer-scan-dns.sh (DNS-aware scanner)
 
 echo "🛑 Emergency cleanup: Stopping all puppeteer scanner processes..."
 
@@ -36,7 +38,8 @@ force_kill_pids() {
 
 echo ""
 echo "Step 1: Stopping main puppeteer scanner processes..."
-kill_by_pattern "puppeteer-quic-parallel" "puppeteer scanner scripts"
+kill_by_pattern "puppeteer-quic-parallel" "puppeteer parallel scanner scripts"
+kill_by_pattern "puppeteer-scan-dns" "DNS-aware scanner scripts"
 
 echo ""
 echo "Step 2: Stopping QUIC proxy processes..."
@@ -61,7 +64,8 @@ kill_by_pattern "timeout.*node" "timeout wrapper processes"
 
 echo ""
 echo "Step 6: Force killing any stubborn processes..."
-force_kill_pids "puppeteer-quic-parallel" "stubborn scanner processes"
+force_kill_pids "puppeteer-quic-parallel" "stubborn parallel scanner processes"
+force_kill_pids "puppeteer-scan-dns" "stubborn DNS scanner processes"
 force_kill_pids "puppeteer-client.js" "stubborn puppeteer processes"
 force_kill_pids "target/release/quiche_server" "stubborn QUIC processes"
 force_kill_pids "quic_server" "stubborn QUIC processes (alt pattern)"
@@ -85,5 +89,9 @@ fi
 
 echo ""
 echo "🧹 Cleanup completed!"
+echo "💡 Supported scanners:"
+echo "   • puppeteer-quic-parallel.sh (parallel scanner)"
+echo "   • puppeteer-scan-dns.sh (DNS-aware scanner)"
+echo ""
 echo "💡 Tip: You can also add this to your .bashrc as an alias:"
 echo "   alias killscanner='cd ~/Workspace/puppeteer-scanner && ./kill-puppeteer-parallel-scanner.sh'"

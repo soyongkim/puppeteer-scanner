@@ -50,6 +50,7 @@ export function getConfiguration(argMap) {
     noAdBlocking: argMap['no-ad'] === true || argMap['no-ad'] === 'true',
     proxyPort: argMap['proxy-port'] || PROXY_CONFIG.PORT.toString(),
     reportPort: argMap['report-port'] || PROXY_STATS_CONFIG.PORT.toString(),
+    aggregateServer: argMap['aggregate-server'] || null,
     debugMode: argMap.debug === true || argMap.debug === 'true'
   };
   
@@ -63,6 +64,17 @@ export function getConfiguration(argMap) {
   const reportProtocol = argMap['report-protocol'] || PROXY_STATS_CONFIG.PROTOCOL;
   const reportEndpoint = argMap['report-endpoint'] || PROXY_STATS_CONFIG.ENDPOINT;
   config.reportUrl = `${reportProtocol}://${reportHost}:${config.reportPort}${reportEndpoint}`;
+  
+  // If aggregate server is specified, parse it and build the aggregate URL
+  if (config.aggregateServer) {
+    // Format: host:port or http://host:port/stats
+    if (config.aggregateServer.startsWith('http')) {
+      config.aggregateUrl = config.aggregateServer;
+    } else {
+      // Assume format is host:port, build full URL
+      config.aggregateUrl = `http://${config.aggregateServer}/stats`;
+    }
+  }
   
   return config;
 }
@@ -107,6 +119,8 @@ Options:
   --no-ad                 Enable ad/tracker blocking during page load
   --proxy-port=PORT       QUIC proxy port (default: 4433)
   --report-port=PORT      Proxy statistics port (default: 9090)
+  --aggregate-server=URL  Aggregate server for connection details (e.g., localhost:9090)
+                          When set, fetches detailed connection stats regardless of proxy setting
   --debug                 Enable debug logging
 
 Examples:
@@ -115,5 +129,6 @@ Examples:
   node puppeteer-client.js --url=example.com --use-proxy --tcp-fallback --jp
   node puppeteer-client.js --url=example.com --no-ad --debug
   node puppeteer-client.js --url=example.com --no-lang
+  node puppeteer-client.js --url=example.com --aggregate-server=localhost:9090
 `);
 }

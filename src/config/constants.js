@@ -58,8 +58,8 @@ export const STATUS_PRIORITY = {
 export const RETRY_CONFIG = {
   MAX_RETRIES: 0,  // Currently disabled
   DELAYS: [2000, 5000, 10000, 15000, 20000, 30000], // Exponential backoff in ms
-  INACTIVITY_TIMEOUT: 60000, // 60 seconds of no network activity
-  NAVIGATION_TIMEOUT: 60000   // Overall navigation timeout
+  INACTIVITY_TIMEOUT: 15000, // 60 seconds of no network activity
+  NAVIGATION_TIMEOUT: 15000   // Overall navigation timeout
 };
 
 // Chrome configuration
@@ -69,12 +69,13 @@ export const CHROME_CONFIG = {
   DOWNLOAD_URL: 'https://storage.googleapis.com/chrome-for-testing-public/140.0.7339.82/linux64/chrome-headless-shell-linux64.zip'
 };
 
-// Browser launch arguments
+// Browser launch arguments.
 export const BROWSER_ARGS = [
     // ═══ BASIC BROWSER FLAGS ═══
     '--no-sandbox',
-    '--enable-unsafe-swiftshader',
     '--ignore-certificate-errors',
+    '--disable-dev-shm-usage',
+    '--remote-debugging-port=0',
 
     // ═══ QUIC-SPECIFIC ═══
     '--origin-to-force-quic-on=*',

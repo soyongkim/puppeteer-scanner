@@ -108,7 +108,7 @@ export async function performPageScan(config, state) {
       startTime: result.startTime,
       success: result.success,
       // Include all state data for results processing
-      mainStatus: state.mainStatus,
+      mainStatus: state.firstMainDocumentStatus || (result.response && result.response.status()),
       mainHeaders: state.mainHeaders,
       failedResources: state.failedResources,
       requestedResources: state.requestedResources,
@@ -122,7 +122,7 @@ export async function performPageScan(config, state) {
         hasRedirect: false,
         redirectStatus: null,
         redirectLocation: null,
-        finalStatus: state.mainStatus,
+        finalStatus: state.firstMainDocumentStatus || (result.response && result.response.status()),
         finalDomain: null,
         redirectChain: []
       },

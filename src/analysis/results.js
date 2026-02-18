@@ -4,15 +4,20 @@
  */
 
 import {
-    analyzeRedirectAndIP,
-    calculateDomainStatistics,
-    detectCloudflareChallenge,
-    extractConnectionStatistics
+  createErrorBlockingResults,
+  createSkippedBlockingResults,
+  detectBlockingIndicators
+} from '../analysis/blocking.js';
+import {
+  analyzeRedirectAndIP,
+  calculateDomainStatistics,
+  detectCloudflareChallenge,
+  extractConnectionStatistics
 } from '../analysis/domains.js';
 import {
-    createErrorLanguageResults,
-    createSkippedLanguageResults,
-    detectWebsiteLanguage
+  createErrorLanguageResults,
+  createSkippedLanguageResults,
+  detectWebsiteLanguage
 } from '../analysis/language.js';
 import { extractStatusFromProxyConnection, fetchProxyStats, getDefaultProxyStats } from '../network/proxy.js';
 import { escapeCsvField, writeToCsv } from '../utils/csv.js';
@@ -35,25 +40,30 @@ export async function processResults(scanResult, config) {
     pendingResources,
     totalBytes,
     targetDomainRedirectInfo,
+    domainToIP,
     page
   } = scanResult;
 
   const baseLoadTime = ((Date.now() - startTime) / 1000);
   const loadTime = baseLoadTime.toFixed(2);
 
-  // ── Fetch proxy statistics to check for real IP ───────────────────────
+  // ── Fetch proxy/aggregate statistics to check for real IP and connection details ───
   let proxyStats = getDefaultProxyStats();
-  if (config.useProxy) {
+  const hasAggregateServer = config.aggregateServer || config.useProxy;
+  
+  if (hasAggregateServer) {
     try {
-      const fetchedStats = await fetchProxyStats(config.reportUrl || `http://localhost:${config.reportPort || '9090'}/stats`, config.debugMode);
+      // Use aggregate server URL if specified, otherwise fall back to proxy stats URL
+      const statsUrl = config.aggregateUrl || config.reportUrl || `http://localhost:${config.reportPort || '9090'}/stats`;
+      const fetchedStats = await fetchProxyStats(statsUrl, config.debugMode);
       if (fetchedStats) {
         proxyStats = fetchedStats;
-        debug(`Proxy stats retrieved: ${proxyStats.total_opened_streams} streams, ${proxyStats.total_redirects} redirects, ${proxyStats.total_data_amount} bytes total, ${proxyStats.total_migrated_data_amount} bytes migrated`, config.debugMode);
+        debug(`Stats retrieved from ${statsUrl}: ${proxyStats.total_opened_streams} streams, ${proxyStats.total_redirects} redirects, ${proxyStats.total_data_amount} bytes total, ${proxyStats.total_migrated_data_amount} bytes migrated`, config.debugMode);
       } else {
-        debug(`[WARNING] No proxy statistics found.`, config.debugMode);
+        debug(`[WARNING] No statistics found from ${statsUrl}.`, config.debugMode);
       }
-    } catch (proxyErr) {
-      debug(`[WARNING] Failed to fetch proxy statistics: ${proxyErr.message}`, config.debugMode);
+    } catch (statsErr) {
+      debug(`[WARNING] Failed to fetch statistics: ${statsErr.message}`, config.debugMode);
     }
   }
 
@@ -100,6 +110,37 @@ export async function processResults(scanResult, config) {
     languageResults = createSkippedLanguageResults();
   }
 
+  // ── Geo-blocking and CAPTCHA Detection ─────────────────────────────────
+  let blockingResults;
+  if (config.useLanguageDetection) {
+    log(`\n=== GEO-BLOCKING & CAPTCHA DETECTION ===`);
+    try {
+      blockingResults = await detectBlockingIndicators(page);
+      
+      // Display detection results
+      log(`Geo-blocking: ${blockingResults.geoBlocking.detected ? 'Yes' : 'No'}`);
+      if (blockingResults.geoBlocking.detected && blockingResults.geoBlocking.keywords.length > 0) {
+        log(`  Keywords found: ${blockingResults.geoBlocking.keywords.join(', ')}`);
+        log(`  Total matches: ${blockingResults.geoBlocking.count}`);
+      }
+      
+      log(`CAPTCHA: ${blockingResults.captcha.detected ? 'Yes' : 'No'}`);
+      if (blockingResults.captcha.detected && blockingResults.captcha.keywords.length > 0) {
+        log(`  Keywords found: ${blockingResults.captcha.keywords.join(', ')}`);
+        log(`  Total matches: ${blockingResults.captcha.count}`);
+      }
+      
+      log(`Text Length: ${blockingResults.textLength} characters`);
+      
+    } catch (blockingErr) {
+      log(`Blocking detection failed: ${blockingErr.message}`);
+      blockingResults = createErrorBlockingResults(blockingErr);
+    }
+  } else {
+    // Blocking detection is disabled (follows language detection flag)
+    blockingResults = createSkippedBlockingResults();
+  }
+
   // ── Analysis of failed resources ────────────────────────────────────────
   const totalRequested = requestedResources.length;
   const uniqueDomainsRequested = new Set(requestedResources.map(r => r.domain)).size;
@@ -126,6 +167,8 @@ export async function processResults(scanResult, config) {
     response,
     proxyStats,
     useProxy: config.useProxy,
+    hasAggregateServer,
+    domainToIP,
     global: { 
       ...(global || {}),
       targetDomainRedirectInfo: targetDomainRedirectInfo
@@ -155,8 +198,14 @@ export async function processResults(scanResult, config) {
       }
     }
     
-    // Redirected status: extract from proxy connection details for final domain
-    redirectedStatusCode = extractStatusFromProxyConnection(redirectAnalysis.redirectedDomain, proxyStats);
+    // Redirected status: try state final status first, then proxy/aggregate extraction
+    if (targetDomainRedirectInfo.finalStatus) {
+      redirectedStatusCode = targetDomainRedirectInfo.finalStatus;
+      debug(`[REDIRECTED-STATUS] Using final status from state: ${redirectedStatusCode}`, config.debugMode);
+    } else if (hasAggregateServer) {
+      redirectedStatusCode = extractStatusFromProxyConnection(redirectAnalysis.redirectedDomain, proxyStats);
+      debug(`[REDIRECTED-STATUS] Using aggregate/proxy extraction for ${redirectAnalysis.redirectedDomain}: ${redirectedStatusCode}`, config.debugMode);
+    }
   } else {
     // No redirect case: first status is the main/final status, or extract from proxy if not available
     firstStatusCode = targetDomainRedirectInfo.finalStatus || mainStatus;
@@ -184,7 +233,9 @@ export async function processResults(scanResult, config) {
     redirectedIP: redirectAnalysis.redirectedIP,
     redirectedStatusCode,
     languageResults,
+    blockingResults,
     loadTime,
+    totalBytes,
     uniqueDomainsRequested: proxyFields.totalDomainsForCsv,
     connectionFailedDomains: domainStatistics.connectionFailedDomains,
     non200Domains: domainStatistics.non200Domains,
@@ -212,6 +263,7 @@ export async function processResults(scanResult, config) {
       loadTime: parseFloat(loadTime),
       totalBytes,
       languageResults,
+      blockingResults,
       domainStatistics,
       redirectAnalysis,
       cloudflareDetected: cloudflareDetected === 'Yes',
@@ -342,15 +394,18 @@ export async function handleScanError(err, config, state) {
     log(`Additional info: ${cloudflareChallenge}`);
   }
   
-  // ── Fetch proxy statistics even on connection failure ─────────────────────
+  // ── Fetch proxy/aggregate statistics even on connection failure ─────────
   let proxyStats = getDefaultProxyStats();
-  if (config.useProxy) {
+  const hasAggregateServer = config.aggregateServer || config.useProxy;
+  
+  if (hasAggregateServer) {
     try {
-      debug('Fetching proxy statistics after connection failure...', config.debugMode);
-      const fetchedStats = await fetchProxyStats(config.reportUrl || `http://localhost:${config.reportPort || '9090'}/stats`, config.debugMode);
+      debug('Fetching statistics after connection failure...', config.debugMode);
+      const statsUrl = config.aggregateUrl || config.reportUrl || `http://localhost:${config.reportPort || '9090'}/stats`;
+      const fetchedStats = await fetchProxyStats(statsUrl, config.debugMode);
       if (fetchedStats) {
         proxyStats = fetchedStats;
-        debug(`Proxy stats after failure: ${proxyStats.total_opened_streams} streams, ${proxyStats.total_redirects} redirects, ${proxyStats.total_data_amount} bytes total`, config.debugMode);
+        debug(`Stats after failure: ${proxyStats.total_opened_streams} streams, ${proxyStats.total_redirects} redirects, ${proxyStats.total_data_amount} bytes total`, config.debugMode);
         
         // Try to get real IP even on failure
         if (proxyStats.connections_detail) {
@@ -564,7 +619,9 @@ export async function handleScanError(err, config, state) {
         primaryLanguage: 'Error',
         declaredLanguage: 'unknown'
       },
+      blockingResults: createErrorBlockingResults(err),
       loadTime: '-',
+      totalBytes: 0,
       uniqueDomainsRequested: proxyFields.totalDomainsForCsv,
       connectionFailedDomains: { size: 1 }, // Always 1 for complete connection failures
       non200Domains: { size: 0 }, // No HTTP errors in connection failure cases

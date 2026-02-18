@@ -4,11 +4,11 @@
 
 import puppeteer from 'puppeteer-core';
 import {
-    BROWSER_ARGS,
-    CHROME_CONFIG,
-    DEFAULT_HEADERS,
-    DEFAULT_USER_AGENT,
-    DEFAULT_VIEWPORT
+  BROWSER_ARGS,
+  CHROME_CONFIG,
+  DEFAULT_HEADERS,
+  DEFAULT_USER_AGENT,
+  DEFAULT_VIEWPORT
 } from '../config/constants.js';
 import { log } from '../utils/logger.js';
 
@@ -67,6 +67,7 @@ export async function launchBrowser(config, useTcp = false) {
   
   // Disable cache at page level
   await page.setCacheEnabled(false);
+  await page.setBypassServiceWorker(true);
   
   return { browser, page };
 }

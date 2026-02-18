@@ -187,6 +187,9 @@ export function setupPageListeners(page, state, config) {
           debug(`[MAIN-STATUS] First main document status: ${status}`, config.debugMode);
         }
         
+        // Always update the final status (handles redirects)
+        state.finalMainDocumentStatus = status;
+        
         // ═══ CAPTURE 300-series redirect Location headers ═══
         if (status >= 300 && status < 400) {
           const locationHeader = res.headers()['location'];
@@ -209,6 +212,10 @@ export function setupPageListeners(page, state, config) {
             
             debug(`[REDIRECT-CAPTURE] ${status} redirect to: ${locationHeader}`, config.debugMode);
           }
+        } else if (state.targetDomainRedirectInfo.hasRedirect) {
+          // This is the final status after a redirect
+          state.targetDomainRedirectInfo.finalStatus = status;
+          debug(`[FINAL-STATUS] Final document status after redirect: ${status}`, config.debugMode);
         }
         
         // Update highest priority status based on error severity
